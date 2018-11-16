@@ -6,8 +6,13 @@ import nstrand
 from LGneurons import *
 from modelParams import *
 import os
-import nest.raster_plot
-import nest.voltage_trace
+
+use_nest=lambda x: 'simulator' not in params or params['simulator']=='NEST'
+use_nengo=lambda x: 'simulator' in params and params['simulator']=='Nengo'
+if use_nest():
+  import nest.raster_plot
+  import nest.voltage_traceelif use_nengo():
+
 import sys
 
 import csv
@@ -29,16 +34,28 @@ def createBG():
         # remove the extra arg
         kwargs.pop("nbCh", None)
       create(*args, **kwargs)
-    update_Ie = lambda p: nest.SetStatus(Pop[p],{"I_e":params['Ie'+p]})
-    raise NotImplementedError("TODONengo: store Ie nodes and update their values? Better than creating here because you may want to update\
-                                                                -> changing node.output works on a minimal example")
+    
+    if use_nest():
+      update_Ie = lambda p: nest.SetStatus(Pop[p],{"I_e":params['Ie'+p]})
+    elif use_nengo():
+      def update_Ie(p):
+        Pop[p].Ie.output = params['Ie'+p]
+      raise NotImplementedError("TODONengo: when creating pops: store Ie nodes in pops and connect them with transform=[1/Pop[p].V_th], synapse=None")
   else:
     def create_pop(*args, **kwargs):
       if 'nbCh' not in kwargs.keys():
         # enforce the default
         kwargs['nbCh'] = params['nbCh']
       createMC(*args, **kwargs)
-    update_Ie = lambda p: [nest.SetStatus(Pop[p][i],{"I_e":params['Ie'+p]}) for i in range(len(Pop[p]))]
+
+    if use_nest():
+      update_Ie = lambda p: [nest.SetStatus(Pop[p][i],{"I_e":params['Ie'+p]}) for i in range(len(Pop[p]))]
+    elif use_nengo():
+      def update_Ie(p):
+        for i in range(len(Pop[p])):
+          Pop[p][i].Ie.output = params['Ie'+p]
+      raise NotImplementedError("TODONengo: when creating pops: store Ie nodes in pops and connect them with transform=[1/Pop[p].V_th], synapse=None")
+    
 
   nbSim['MSN'] = params['nbMSN']
   create_pop('MSN')
@@ -334,6 +351,8 @@ def connectBG(antagInjectionSite,antag):
 def alter_connection(src, tgt, tgt_receptor, altered_weight):
   if params['nbCh'] != 1:
     raise NotImplementedError('Altering connection is implemented only in the one-channel case')
+  if use_nengo():
+    raise NotImplementedError('TODONengo: implement alter_connection. Store connections (see attributes of class Connection) in target or source pop?')
   recTypeEquiv = {'AMPA':1,'NMDA':2,'GABA':3, 'GABAA':3} # adds 'GABAA'
   # check that we have this connection in the current network
   conns_in = nest.GetConnections(source=Pop[src], target=Pop[tgt])
@@ -399,14 +418,20 @@ def reactivate(site, a, ww):
 # In the future, these will be handled by changing the network weights
 #------------------------------------------
 def instantiate_BG(params={}, antagInjectionSite='none', antag=''):
-  nest.ResetKernel()
+  if use_nest():
+    nest.ResetKernel()
+  elif use_nengo():
+    raise NotImplementedError("TODONengo: ResetKernel")
+
   dataPath='log/'
-  if 'nbcpu' in params:
-    nest.SetKernelStatus({'local_num_threads': params['nbcpu']})
+  if use_nest():
+    if 'nbcpu' in params:
+      nest.SetKernelStatus({'local_num_threads': params['nbcpu']})
 
   nstrand.set_seed(params['nestSeed'], params['pythonSeed']) # sets the seed for the BG construction
 
-  nest.SetKernelStatus({"data_path": dataPath})
+  if use_nest():
+    nest.SetKernelStatus({"data_path": dataPath})
   #nest.SetKernelStatus({"resolution": 0.005}) # simulates with a higher precision
   initNeurons()
 

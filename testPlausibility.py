@@ -12,7 +12,12 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import pylab as pl
-import nest.raster_plot as raster
+
+use_nest=lambda x: 'simulator' not in params or params['simulator']=='NEST'
+use_nengo=lambda x: 'simulator' in params and params['simulator']=='Nengo'
+if use_nest():
+  import nest.raster_plot as raster
+
 from iniBG import *
 from spikeProcessing import FanoFactor, OscIndex
 from filter import lowpass
@@ -33,31 +38,43 @@ oscilFreq = {}
 # - G{MSN,FSI,STN,GPi,GPe} : gain to be applied on LG14 input synaptic weights for each population
 #------------------------------------------
 def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',logFileName='', computeLFP=True, computePS=True):
-  nest.ResetNetwork()
+  if use_nest():
+    nest.ResetNetwork()
+  elif use_nengo():
+    raise NotImplementedError("TODONengo: ResetKernel")
+
   initNeurons()
 
   showPotential = False # Switch to True to graph neurons' membrane potentials - does not handle well restarted simulations
 
   dataPath='log/'
-  nest.SetKernelStatus({"overwrite_files":True}) # when we redo the simulation, we erase the previous traces
+  if use_nest():
+    nest.SetKernelStatus({"overwrite_files":True}) # when we redo the simulation, we erase the previous traces
 
   nstrand.set_seed(params['nestSeed'], params['pythonSeed']) # sets the seed for the simulation
 
-  simulationOffset = nest.GetKernelStatus('time')
-  print('Simulation Offset: '+str(simulationOffset))
+  if use_nest():
+    simulationOffset = nest.GetKernelStatus('time')
+    print('Simulation Offset: '+str(simulationOffset))
+  elif use_nengo():
+    raise NotImplementedError("TODONengo: get time simulationOffset")
+  
   
   offsetDuration = 2500. # ms
   simDuration = 2500. # ms
 
-  # single or multi-channel?
-  if params['nbCh'] == 1:
-    connect_detector = lambda N: nest.Connect(Pop[N], spkDetect[N])
-    disconnect_detector = lambda N: nest.Disconnect(Pop[N], spkDetect[N])
-    connect_multimeter = lambda N: nest.Connect(multimeters[N], [Pop[N][0]])
-  else:
-    connect_detector= lambda N: [nest.Connect(Pop[N][i], spkDetect[N]) for i in range(len(Pop[N]))]
-    disconnect_detector= lambda N: [nest.Disconnect(Pop[N][i], spkDetect[N]) for i in range(len(Pop[N]))]
-    connect_multimeter = lambda N: nest.Connect(multimeters[N], [Pop[N][0][0]])
+  if use_nest():
+    # single or multi-channel?
+    if params['nbCh'] == 1:
+      connect_detector = lambda N: nest.Connect(Pop[N], spkDetect[N])
+      disconnect_detector = lambda N: nest.Disconnect(Pop[N], spkDetect[N])
+      connect_multimeter = lambda N: nest.Connect(multimeters[N], [Pop[N][0]])
+    else:
+      connect_detector= lambda N: [nest.Connect(Pop[N][i], spkDetect[N]) for i in range(len(Pop[N]))]
+      disconnect_detector= lambda N: [nest.Disconnect(Pop[N][i], spkDetect[N]) for i in range(len(Pop[N]))]
+      connect_multimeter = lambda N: nest.Connect(multimeters[N], [Pop[N][0][0]])
+  elif use_nengo():
+    raise NotImplementedError("TODONengo: multimeter probing")
 
   #-------------------------
   # measures
@@ -77,27 +94,34 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
   if antagInjectionSite != 'none':
     antagStr = antagInjectionSite+'_'+antag+'_'
 
-  for N in NUCLEI:
-    # 1000ms offset period for network stabilization
-    spkDetect[N] = nest.Create("spike_detector", params={"withgid": True, "withtime": True, "label": antagStr+N, "to_file": storeGDF, 'start':offsetDuration+simulationOffset,'stop':offsetDuration+simDuration+simulationOffset})
-    connect_detector(N)
-    #spkDetect[N] = nest.Create("spike_detector", len([Pop[N][x] for x in range(len(Pop[N])) if x<maxRecord]), params={"withgid": True, "withtime": True, "label": antagStr+N, "to_file": storeGDF, 'start':offsetDuration+simulationOffset,'stop':offsetDuration+simDuration+simulationOffset})
-    #nest.Connect([Pop[N][0]], spkDetect[N])
-    if showPotential:
-      # multimeter records only the last 200ms in one neuron in each population
-      multimeters[N] = nest.Create('multimeter', params = {"withgid": True, 'withtime': True, 'interval': 0.1, 'record_from': ['V_m'], "label": antagStr+N, "to_file": False, 'start':offsetDuration+simulationOffset+simDuration-200.,'stop':offsetDuration+simDuration+simulationOffset})
-      connect_multimeter(N)
-    if computeLFP and N in focusNuclei:
-      #voltmeters used to compute LFP
-      voltmeters[N] = nest.Create("voltmeter", len([Pop[N][x] for x in range(len(Pop[N])) if x<maxRecord]), params = {'to_accumulator':True, 'start':offsetDuration+simulationOffset,'stop':offsetDuration+simDuration+simulationOffset})
-      nest.SetStatus(voltmeters[N], {"withtime":True, 'interval': time_step*1000})
-      nest.Connect(voltmeters[N], [Pop[N][x] for x in range(len(Pop[N])) if x<maxRecord])
+  if use_nest():
+    for N in NUCLEI:
+      # 1000ms offset period for network stabilization
+      spkDetect[N] = nest.Create("spike_detector", params={"withgid": True, "withtime": True, "label": antagStr+N, "to_file": storeGDF, 'start':offsetDuration+simulationOffset,'stop':offsetDuration+simDuration+simulationOffset})
+      connect_detector(N)
+      #spkDetect[N] = nest.Create("spike_detector", len([Pop[N][x] for x in range(len(Pop[N])) if x<maxRecord]), params={"withgid": True, "withtime": True, "label": antagStr+N, "to_file": storeGDF, 'start':offsetDuration+simulationOffset,'stop':offsetDuration+simDuration+simulationOffset})
+      #nest.Connect([Pop[N][0]], spkDetect[N])
+      if showPotential:
+        # multimeter records only the last 200ms in one neuron in each population
+        multimeters[N] = nest.Create('multimeter', params = {"withgid": True, 'withtime': True, 'interval': 0.1, 'record_from': ['V_m'], "label": antagStr+N, "to_file": False, 'start':offsetDuration+simulationOffset+simDuration-200.,'stop':offsetDuration+simDuration+simulationOffset})
+        connect_multimeter(N)
+      if computeLFP and N in focusNuclei:
+        #voltmeters used to compute LFP
+        voltmeters[N] = nest.Create("voltmeter", len([Pop[N][x] for x in range(len(Pop[N])) if x<maxRecord]), params = {'to_accumulator':True, 'start':offsetDuration+simulationOffset,'stop':offsetDuration+simDuration+simulationOffset})
+        nest.SetStatus(voltmeters[N], {"withtime":True, 'interval': time_step*1000})
+        nest.Connect(voltmeters[N], [Pop[N][x] for x in range(len(Pop[N])) if x<maxRecord])
+  elif use_nengo():
+    raise NotImplementedError("TODONengo: multimeter probing")
 
 
   #-------------------------
   # Simulation
   #-------------------------
-  nest.Simulate(simDuration+offsetDuration)
+  if use_nest():
+    nest.Simulate(simDuration+offsetDuration)
+  elif use_nengo():
+    with nengo.Simulator(model, dt=.001) as sim:
+      sim.run(simDuration+offsetDuration)
 
   score = 0
 
@@ -122,7 +146,10 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
       
     for N in NUCLEI:
       strTestPassed = 'NO!'
-      expeRate[N] = nest.GetStatus(spkDetect[N], 'n_events')[0] / float(nbSim[N]*simDuration*params['nbCh']) * 1000
+      if use_nest():
+        expeRate[N] = nest.GetStatus(spkDetect[N], 'n_events')[0] / float(nbSim[N]*simDuration*params['nbCh']) * 1000
+      elif use_nengo():
+        raise NotImplementedError("TODONengo: get events")
       if expeRate[N] <= FRRNormal[N][1] and expeRate[N] >= FRRNormal[N][0]:
         # if the measured rate is within acceptable values
         strTestPassed = 'OK'
@@ -152,8 +179,11 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
         #--------------------
         if computeLFP:            
           nbNeurons = len([Pop[N][x] for x in range(len(Pop[N])) if x<maxRecord])
-          Vm = nest.GetStatus(voltmeters[N])[0]['events']['V_m']/nbNeurons
-          
+          if use_nest():
+            Vm = nest.GetStatus(voltmeters[N])[0]['events']['V_m']/nbNeurons
+          elif use_nengo():
+            raise NotImplementedError("TODONengo: get Vm")
+
           # save LFP plots
           if True:
             plt.plot(range(len(Vm[500:1000])), Vm[500:1000],color='black', linewidth=.5) # plot from 500 to 1000ms
@@ -181,10 +211,17 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
           #--------------------
           #  Compute spikes histogram for PS
           #--------------------
-          data = nest.GetStatus(spkDetect[N], keys="events")[0]['times']
+          if use_nest():
+            data = nest.GetStatus(spkDetect[N], keys="events")[0]['times']
+          elif use_nengo():
+            raise NotImplementedError("TODONengo: get events")
           data = [round(x-offsetDuration-simulationOffset,4) for x in data]
           bins = np.arange(0, simDuration, 1000*time_step)
-          data,bins = raster._histogram(data, bins=bins)
+          if use_nest():
+            data,bins = raster._histogram(data, bins=bins)
+          elif use_nengo():
+            raise NotImplementedError("TODONengo: get raster histogram")
+          
           PSmetrics[N] += [{'name' : 'spikes', 'data' : data}]
 
           if computeLFP:            
@@ -285,7 +322,10 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
     validationStr = ""
     frstr += str(antag) + " , "
     for N in NUCLEI:
-      expeRate[N] = nest.GetStatus(spkDetect[N], 'n_events')[0] / float(nbSim[N]*simDuration*params['nbCh']) * 1000
+      if use_nest():
+        expeRate[N] = nest.GetStatus(spkDetect[N], 'n_events')[0] / float(nbSim[N]*simDuration*params['nbCh']) * 1000
+      elif use_nengo():
+        raise NotImplementedError('TODONengo: spkdetect')
       if N == antagInjectionSite:
         strTestPassed = 'NO!'
         if expeRate[N] <= FRRAnt[N][antag][1] and expeRate[N] >= FRRAnt[N][antag][0]:
@@ -337,33 +377,43 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
   #-------------------------
   if showRasters:
     for N in NUCLEI:
+      if use_nest():
         dSD = nest.GetStatus(spkDetect[N],keys="events")[0]
         evs = dSD["senders"]
         ts = dSD["times"]
         times = [[ts[t] for t in range(len(ts)) if evs[t]==neuron] for neuron in Pop[N]]
         colors = [['black' for t in range(len(ts)) if evs[t]==neuron] for neuron in Pop[N]]
+      elif use_nengo():
+        raise NotImplementedError('TODONengo: spkdetect')
 
-        try:
-          plt.plot(ts, evs, "|", color='black', markersize=2)
-          plt.title(N+ ' raster plot')
-          plt.savefig("plots/"+N+'_rastePlot.pdf') 
-          plt.close()
-        except AttributeError:
-          print 'A neuron of the '+N+' didn\'t spike which caused an error in the raster plot --> skipping'
+      try:
+        plt.plot(ts, evs, "|", color='black', markersize=2)
+        plt.title(N+ ' raster plot')
+        plt.savefig("plots/"+N+'_rastePlot.pdf') 
+        plt.close()
+      except AttributeError:
+        print 'A neuron of the '+N+' didn\'t spike which caused an error in the raster plot --> skipping'
 
         
   if showRasters and interactive:
     displayStr = ' ('+antagStr[:-1]+')' if (antagInjectionSite != 'none') else ''
     for N in NUCLEI:
-      # histograms crash in the multi-channels case
-      nest.raster_plot.from_device(spkDetect[N], hist=(params['nbCh'] == 1), title=N+displayStr)
+      if use_nest():
+        # histograms crash in the multi-channels case
+        nest.raster_plot.from_device(spkDetect[N], hist=(params['nbCh'] == 1), title=N+displayStr)
+      elif use_nengo():
+        raise NotImplementedError('TODONengo: nest raster plot')
 
     if showPotential:
       pl.figure()
       nsub = 231
       for N in NUCLEI:
         pl.subplot(nsub)
-        nest.voltage_trace.from_device(multimeters[N],title=N+displayStr+' #0')
+        if use_nest():
+          nest.voltage_trace.from_device(multimeters[N],title=N+displayStr+' #0')
+        elif use_nengo():
+          raise NotImplementedError('TODONengo: nest voltage trace')
+        
         disconnect_detector(N)
         pl.axhline(y=BGparams[N]['V_th'], color='r', linestyle='-')
         nsub += 1
@@ -428,7 +478,8 @@ def main(): # used
     else :
       print "Incorrect number of parameters:",len(sys.argv),"-",len(paramKeys),"expected"
 
-  nest.set_verbosity("M_WARNING")
+  if use_nest():
+    nest.set_verbosity("M_WARNING")
 
   instantiate_BG(params, antagInjectionSite='none', antag='')
   score = np.zeros((2))
