@@ -26,7 +26,7 @@ use_nest=lambda: 'simulator' not in params or params['simulator']=='NEST'
 use_nengo=lambda: 'simulator' in params and params['simulator']=='Nengo'
 if use_nest():
   import nest.raster_plot as raster
-
+  
 restFR = {} # this will be populated with firing rates of all nuclei, at rest
 oscilPow = {} # Oscillations power and frequency at rest
 oscilFreq = {}
@@ -123,7 +123,7 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
   if use_nest():
     nest.Simulate(simDuration+offsetDuration)
   elif use_nengo():
-    with nengo.Simulator(model, dt=dt) as sim:
+    with nengo.Simulator(model, dt=.001) as sim:
       sim.run(simDuration+offsetDuration)
 
   score = 0

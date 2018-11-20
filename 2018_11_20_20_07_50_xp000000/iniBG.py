@@ -7,11 +7,11 @@ from LGneurons import *
 from modelParams import *
 import os
 
-use_nest=lambda: 'simulator' not in params or params['simulator']=='NEST'
-use_nengo=lambda: 'simulator' in params and params['simulator']=='Nengo'
+use_nest=lambda x: 'simulator' not in params or params['simulator']=='NEST'
+use_nengo=lambda x: 'simulator' in params and params['simulator']=='Nengo'
 if use_nest():
   import nest.raster_plot
-  import nest.voltage_trace
+  import nest.voltage_traceelif use_nengo():
 
 import sys
 

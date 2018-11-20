@@ -10,8 +10,8 @@ import pandas as pd
 from modelParams import *
 
 
-use_nest=lambda: 'simulator' not in params or params['simulator']=='NEST'
-use_nengo=lambda: 'simulator' in params and params['simulator']=='Nengo'
+use_nest=lambda x: 'simulator' not in params or params['simulator']=='NEST'
+use_nengo=lambda x: 'simulator' in params and params['simulator']=='Nengo'
 if use_nest():
   import nest
 elif use_nengo():
@@ -20,7 +20,6 @@ import numpy as np
 import numpy.random as rnd
 import csv
 from math import sqrt, cosh, exp, pi
-import copy
 
 AMPASynapseCounter = 0 # counter variable for the fast connect
 
@@ -137,13 +136,7 @@ def loadThetaFromCustomparams(params):
 def initNeurons():
   if use_nest():
     nest.SetDefaults("iaf_psc_alpha_multisynapse", CommonParams)
-    print(nest.GetDefaults('iaf_psc_alpha_multisynapse'))
-  elif use_nengo():
-    commonNeuronType = nengo.neurons.LIF(tau_rc=0.01, tau_ref=CommonParams['t_ref'], min_voltage=CommonParams['V_min'])
-    commonNeuronType.params = {}
-    commonNeuronType.params['tau_syn'] = CommonParams['tau_syn']
-    commonNeuronType.params['V_th'] = CommonParams['V_th']
-
+  print("initNeurons", CommonParams)
 
 #-------------------------------------------------------------------------------
 # Creates a population of neurons
@@ -184,7 +177,8 @@ def create(name,fake=False,parrot=True):
     if use_nest():
       Pop[name] = nest.Create("iaf_psc_alpha_multisynapse",int(nbSim[name]),params=BGparams[name])
     elif use_nengo():
-      Pop[name] = nengo.Ensemble(int(nbSim[name]), 1, encoders=np.ones((int(nbSim[name]))), gain=np.ones((int(nbSim[name]))), bias=np.zeros((int(nbSim[name]))), neuron_type=neuronTypes[name], label=name)
+      Pop[name] = nengo.Ensemble(int(nbSim[name]), 1, encoders=np.ones((int(nbSim[name]))), gain=np.ones((int(nbSim[name]))), bias=np.zeros((int(nbSim[name]))), neuron_type=neuron_type[name])
+      raise NotImplementedError("TODONengo: implement neuron_type")
 
 #-------------------------------------------------------------------------------
 # Creates a popolation of neurons subdivided in Multiple Channels
@@ -230,7 +224,8 @@ def createMC(name,nbCh,fake=False,parrot=True):
         Pop[name].append(nest.Create("iaf_psc_alpha_multisynapse",int(nbSim[name]),params=BGparams[name]))
     elif use_nengo():
       for i in range(nbCh):
-        Pop[name].append(nengo.Ensemble(int(nbSim[name]), 1, encoders=np.ones((int(nbSim[name]))), gain=np.ones((int(nbSim[name]))), bias=np.zeros((int(nbSim[name]))), neuron_type=neuronTypes[name], label=name+' ch'+str(i)))
+        Pop[name].append(nengo.Ensemble(int(nbSim[name]), 1, encoders=np.ones((int(nbSim[name]))), gain=np.ones((int(nbSim[name]))), bias=np.zeros((int(nbSim[name]))), neuron_type=neuron_type[name]))
+        raise NotImplementedError("TODONengo: implement neuron_type")
 
 
 #------------------------------------------------------------------------------
@@ -309,7 +304,7 @@ def mass_mirror(source, synapse_label, receptor_type, weight, delay, stochastic_
 
   # find all AMPA connections for the given projection type
   printv('looking for AMPA connections to mirror with NMDA...\n')
-  if use_nest():
+  elif use_nest():
     ampa_conns = nest.GetConnections(source=source, synapse_label=synapse_label)
   elif use_nengo():
     raise NotImplementedError("Hint: nest.Connection returns <Connection from <Node (unlabeled) at 0x7fc374108860> to <Neurons of <Ensemble (unlabeled) at 0x7fc37415acc0>>>")
@@ -873,7 +868,7 @@ CommonParams = {'t_ref':         2.0,
                 'V_min':       -20.0, # as in HSG06
                 'tau_syn':   tau_syn,}
 
-initNeurons() # sets the default params of iaf_psc_alpha_mutisynapse neurons to CommonParams
+initNeurons() # sets the default params of iaf_alpha_psc_mutisynapse neurons to CommonParams
 
 MSNparams = {'tau_m':        13.0, # according to SBE12
              'V_th':         30.0, # value of the LG14 example model, table 9
@@ -920,19 +915,6 @@ BGparams = {'MSN':MSNparams,
             'Arky':Arkyparams,
             'Prot':Protparams,
             'GPi':GPiparams}
-
-def initNeuronTypes(params, commonNeuronType):
-  neuronType = {}
-  for pop in params:
-    commonNeuronType = nengo.neurons.LIF(tau_rc=params[pop]['tau_m']/1000., tau_ref=commonNeuronType.tau_ref, min_voltage=commonNeuronType.min_voltage)
-    type_pop.label = 'neuron type ' + pop
-    type_pop.params = copy.deepcopy(commonNeuronType.params)
-    type_pop.params['V_th'] = params[pop]['V_th']
-
-    neuronType[pop] = type_pop
-  return neuronType
-
-neuronTypes = initNeuronTypes(BGparams, commonNeuronType)
 
 Pop = {}
 Fake= {} # Fake contains the Poisson Generators, that will feed the parrot_neurons, stored in Pop
