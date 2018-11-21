@@ -16,6 +16,7 @@ if use_nest():
   import nest
 elif use_nengo():
   import nengo
+  from nengo.synapses import Alpha
 import numpy as np
 import numpy.random as rnd
 import csv
@@ -184,8 +185,15 @@ def create(name,fake=False,parrot=True):
     if use_nest():
       Pop[name] = nest.Create("iaf_psc_alpha_multisynapse",int(nbSim[name]),params=BGparams[name])
     elif use_nengo():
-      Pop[name] = nengo.Ensemble(int(nbSim[name]), 1, encoders=np.ones((int(nbSim[name]))), gain=np.ones((int(nbSim[name]))), bias=np.zeros((int(nbSim[name]))), neuron_type=neuronTypes[name], label=name)
-
+      Pop[name] = nengo.Ensemble(int(nbSim[name]), 1, encoders=np.ones((int(nbSim[name]))), 
+  													gain=np.ones((int(nbSim[name]))), 
+  													bias=np.zeros((int(nbSim[name]))), 
+  													neuron_type=neuronTypes[name], 
+  													label=name)
+      # List of afferent connections with Ie=0 node:
+      Pop[name].afferents = [nengo.Connection(nengo.Node([0], label='Ie node '+name), Pop[name], 
+												transform=1./Pop[name].neuron_type.params['V_th'], 
+												synapse=None, label='Ie connection '+name)]
 #-------------------------------------------------------------------------------
 # Creates a popolation of neurons subdivided in Multiple Channels
 #
@@ -230,8 +238,15 @@ def createMC(name,nbCh,fake=False,parrot=True):
         Pop[name].append(nest.Create("iaf_psc_alpha_multisynapse",int(nbSim[name]),params=BGparams[name]))
     elif use_nengo():
       for i in range(nbCh):
-        Pop[name].append(nengo.Ensemble(int(nbSim[name]), 1, encoders=np.ones((int(nbSim[name]))), gain=np.ones((int(nbSim[name]))), bias=np.zeros((int(nbSim[name]))), neuron_type=neuronTypes[name], label=name+' ch'+str(i)))
-
+        Pop[name].append(nengo.Ensemble(int(nbSim[name]), 1, encoders=np.ones((int(nbSim[name]))), 
+        													gain=np.ones((int(nbSim[name]))), 
+        													bias=np.zeros((int(nbSim[name]))), 
+        													neuron_type=neuronTypes[name], 
+        													label=name+' ch'+str(i)))
+        # List of afferent connections with Ie=0 node:
+		Pop[name][-1].afferents = [nengo.Connection(nengo.Node([0], label='Ie node '+name+' ch'+str(i)), Pop[name][-1], 
+												transform=1./Pop[name][-1].neuron_type.params['V_th'], 
+												synapse=None, label='Ie connection '+name+' ch'+str(i))]
 
 #------------------------------------------------------------------------------
 # Routine to perform the fast connection using nest built-in `connect` function
@@ -278,7 +293,7 @@ def mass_connect(source, dest, synapse_label, inDegree, receptor_type, weight, d
                    {'rule': 'fixed_indegree', 'indegree': int(integer_inDegree)},
                    {'model': 'static_synapse_lbl', 'synapse_label': synapse_label, 'receptor_type': receptor_type, 'weight': weight, 'delay':delay})
     elif use_nengo():
-      nengo.Connection(source.neurons, dest.neurons, transform=[weight*exp(1)*tau_syn[receptor_type]/1000./dest.V_th], synapse=synapse_type[receptor_type])
+      dest.afferents.append(nengo.Connection(source.neurons, dest.neurons, transform=[weight*exp(1)*dest.neuron_type.params['tau_syn'][receptor_type]/1000./dest.V_th], synapse=Alpha(dest.neuron_type.params['tau_syn'][receptor_type])))
       raise NotImplementedError("TODONengo: implement tau_syn, synapse_type, pop.V_th and make sure NEST/Nengo connections are the same (they are not)")
 
   # The second `fixed_total_number` connection distributes remaining axonal

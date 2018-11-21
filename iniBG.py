@@ -39,8 +39,11 @@ def createBG():
       update_Ie = lambda p: nest.SetStatus(Pop[p],{"I_e":params['Ie'+p]})
     elif use_nengo():
       def update_Ie(p):
-        Pop[p].Ie.output = params['Ie'+p]
-      raise NotImplementedError("TODONengo: when creating pops: store Ie nodes in pops and connect them with transform=[1/Pop[p].V_th], synapse=None")
+        Ie = Pop[p].afferents[0]
+        if Ie.label[:2] != 'Ie':
+          print(Ie)
+          raise LookupError('First afferent connection of '+p+' is not from Ie node')
+        Ie.output = params['Ie'+p]
   else:
     def create_pop(*args, **kwargs):
       if 'nbCh' not in kwargs.keys():
@@ -53,8 +56,11 @@ def createBG():
     elif use_nengo():
       def update_Ie(p):
         for i in range(len(Pop[p])):
-          Pop[p][i].Ie.output = params['Ie'+p]
-      raise NotImplementedError("TODONengo: when creating pops: store Ie nodes in pops and connect them with transform=[1/Pop[p].V_th], synapse=None")
+          Ie = Pop[p][i].afferents[0]
+          if Ie.label[:2] != 'Ie':
+            print(Ie)
+            raise LookupError('First afferent connection of '+p+str(i)+' is not from Ie node')
+          Ie.output = params['Ie'+p]
     
 
   nbSim['MSN'] = params['nbMSN']
