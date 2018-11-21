@@ -39,10 +39,10 @@ def createBG():
       update_Ie = lambda p: nest.SetStatus(Pop[p],{"I_e":params['Ie'+p]})
     elif use_nengo():
       def update_Ie(p):
-        Ie = Pop[p].afferents[0]
+        Ie = Pop[p].Ie
         if Ie.label[:2] != 'Ie':
           print(Ie)
-          raise LookupError('First afferent connection of '+p+' is not from Ie node')
+          raise LookupError(p+'.Ie is not Ie node')
         Ie.output = params['Ie'+p]
   else:
     def create_pop(*args, **kwargs):
@@ -56,10 +56,10 @@ def createBG():
     elif use_nengo():
       def update_Ie(p):
         for i in range(len(Pop[p])):
-          Ie = Pop[p][i].afferents[0]
+          Ie = Pop[p][i].Ie
           if Ie.label[:2] != 'Ie':
             print(Ie)
-            raise LookupError('First afferent connection of '+p+str(i)+' is not from Ie node')
+            raise LookupError(p+str(i)+'.Ie is not Ie node')
           Ie.output = params['Ie'+p]
     
 

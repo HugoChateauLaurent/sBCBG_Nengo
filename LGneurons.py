@@ -138,7 +138,6 @@ def loadThetaFromCustomparams(params):
 def initNeurons():
   if use_nest():
     nest.SetDefaults("iaf_psc_alpha_multisynapse", CommonParams)
-    print(nest.GetDefaults('iaf_psc_alpha_multisynapse'))
   elif use_nengo():
     commonNeuronType = nengo.neurons.LIF(tau_rc=0.01, tau_ref=CommonParams['t_ref'], min_voltage=CommonParams['V_min'])
     commonNeuronType.params = {}
@@ -190,10 +189,11 @@ def create(name,fake=False,parrot=True):
   													bias=np.zeros((int(nbSim[name]))), 
   													neuron_type=neuronTypes[name], 
   													label=name)
-      # List of afferent connections with Ie=0 node:
-      Pop[name].afferents = [nengo.Connection(nengo.Node([0], label='Ie node '+name), Pop[name], 
-												transform=1./Pop[name].neuron_type.params['V_th'], 
-												synapse=None, label='Ie connection '+name)]
+      # List of efferent connections with Ie=0 node:
+      Pop[name].efferents = []
+      Pop[name].Ie = nengo.Connection(nengo.Node([0], label='Ie node '+name), Pop[name], 
+                        transform=1./Pop[name].neuron_type.params['V_th'], 
+                        synapse=None, label='Ie connection '+name)
 #-------------------------------------------------------------------------------
 # Creates a popolation of neurons subdivided in Multiple Channels
 #
@@ -243,10 +243,42 @@ def createMC(name,nbCh,fake=False,parrot=True):
         													bias=np.zeros((int(nbSim[name]))), 
         													neuron_type=neuronTypes[name], 
         													label=name+' ch'+str(i)))
-        # List of afferent connections with Ie=0 node:
-		Pop[name][-1].afferents = [nengo.Connection(nengo.Node([0], label='Ie node '+name+' ch'+str(i)), Pop[name][-1], 
-												transform=1./Pop[name][-1].neuron_type.params['V_th'], 
-												synapse=None, label='Ie connection '+name+' ch'+str(i))]
+        # List of efferent connections with Ie=0 node:
+        Pop[name][-1].efferents = []
+        Pop[name][-1].Ie = nengo.Connection(nengo.Node([0], label='Ie node '+name+' ch'+str(i)), Pop[name][-1],
+                                                                    transform=1./Pop[name][-1].neuron_type.params['V_th'], 
+                                                                    synapse=None, 
+                                                                    label='Ie connection '+name+' ch'+str(i))
+
+#------------------------------------------------------------------------------
+# Nengo only:
+# TODO: rewrite
+# Computes the weight matrix of size m*n for a connection between pre -> post
+# with n_pre and n_post number of neurons and a given integer_inDegree.
+# Assumption: a cell from pre cannot be connected twice to a cell from post -> TODO rewrite: Not in Nest
+#------------------------------------------------------------------------------
+def connectivity_matrix(rule, parameter, n_pre, n_post):
+  connectivity = np.zeros((n_post, n_pre))
+
+  if rule=='fixed_indegree':
+    for post_neuron in range(n_post):
+      for in_i in range(parameter):
+        pre_neuron = rnd.randint(0, n_pre)
+        connectivity[post_neuron, pre_neuron] += 1
+  
+  elif rule=='fixed_total_number':
+    for connection in range(parameter):
+      pre_neuron = rnd.randint(0, n_pre)
+      post_neuron = rnd.randint(0, n_post)
+      connectivity[post_neuron, pre_neuron] += 1
+
+  else:
+    print('Nengo error: unknown rule in connectivity_matrix')
+
+  return connectivity
+
+
+
 
 #------------------------------------------------------------------------------
 # Routine to perform the fast connection using nest built-in `connect` function
@@ -293,8 +325,13 @@ def mass_connect(source, dest, synapse_label, inDegree, receptor_type, weight, d
                    {'rule': 'fixed_indegree', 'indegree': int(integer_inDegree)},
                    {'model': 'static_synapse_lbl', 'synapse_label': synapse_label, 'receptor_type': receptor_type, 'weight': weight, 'delay':delay})
     elif use_nengo():
-      dest.afferents.append(nengo.Connection(source.neurons, dest.neurons, transform=[weight*exp(1)*dest.neuron_type.params['tau_syn'][receptor_type]/1000./dest.V_th], synapse=Alpha(dest.neuron_type.params['tau_syn'][receptor_type])))
-      raise NotImplementedError("TODONengo: implement tau_syn, synapse_type, pop.V_th and make sure NEST/Nengo connections are the same (they are not)")
+      if stochastic_delays:
+        raise NotImplementedError("TODONengo: delay distribution")
+      source.efferents.append(nengo.Connection(source.neurons, dest.neurons, 
+      						  transform=connectivity_matrix('fixed_indegree', integer_inDegree, source.n_neurons, dest.n_neurons)*weight*exp(1)*dest.neuron_type.params['tau_syn'][receptor_type]/1000./dest.neuron_type.params['V_th'], 
+      						  synapse=Alpha(dest.neuron_type.params['tau_syn'][receptor_type], 
+                    label=synapse_label)))
+      raise NotImplementedError("TODONengo: delay. See https://www.nengo.ai/nengo/examples/usage/delay_node.html")
 
   # The second `fixed_total_number` connection distributes remaining axonal
   # contacts at random (i.e. the remaining fractional part after the first step)
@@ -308,8 +345,13 @@ def mass_connect(source, dest, synapse_label, inDegree, receptor_type, weight, d
                    {'rule': 'fixed_total_number', 'N': int(remaining_connections)},
                    {'model': 'static_synapse_lbl', 'synapse_label': synapse_label, 'receptor_type': receptor_type, 'weight': weight, 'delay':delay})
     elif use_nengo():
-      nengo.Connection(source.neurons, dest.neurons, transform=[weight*exp(1)*tau_syn[receptor_type]/1000./dest.V_th], synapse=synapse_type[receptor_type])
-      raise NotImplementedError("TODONengo: implement tau_syn, synapse_type, pop.V_th and make sure NEST/Nengo connections are the same (they are not)")
+      if stochastic_delays:
+        raise NotImplementedError("TODONengo: delay distribution")
+      source.efferents.append(nengo.Connection(source.neurons, dest.neurons, 
+                    transform=connectivity_matrix('fixed_total_number', int(remaining_connections), source.n_neurons, dest.n_neurons)*weight*exp(1)*dest.neuron_type.params['tau_syn'][receptor_type]/1000./dest.neuron_type.params['V_th'], 
+                    synapse=Alpha(dest.neuron_type.params['tau_syn'][receptor_type], 
+                    label=synapse_label)))
+      raise NotImplementedError("TODONengo: delay. See https://www.nengo.ai/nengo/examples/usage/delay_node.html")
 #------------------------------------------------------------------------------
 # Routine to duplicate a connection made with a specific receptor, with another
 # receptor (typically to add NMDA connections to existing AMPA connections)
@@ -333,16 +375,19 @@ def mass_mirror(source, synapse_label, receptor_type, weight, delay, stochastic_
     # extract just source and target GID lists, all other information is irrelevant here
     printv('found '+str(len(ampa_conns))+' AMPA connections\n')
     if stochastic_delays != None and delay > 0:
+      if use_nengo():
+        raise NotImplementedError("TODONengo: delay distribution")
       printv('Using stochastic delays in mass-mirror')
     if use_nest():
       delay = np.array(nest.GetStatus(ampa_conns, keys=['delay'])).flatten()
       src, tgt, _, _, _ = zip(*ampa_conns)
+      print('mass_mirror',str(src), str(tgt))
       nest.Connect(src, tgt, 'one_to_one',
                    {'model': 'static_synapse_lbl',
                     'synapse_label': synapse_label, # tag with the same number (doesn't matter)
                     'receptor_type': receptor_type, 'weight': weight, 'delay':delay})
     if use_nengo():
-      raise NotImplementedError("TODONengo: implement stochastic delays, GetConnections, and Connect. See https://www.nengo.ai/nengo/examples/usage/delay_node.html")
+      raise NotImplementedError("TODONengo: store connectivity matrix to know how many connections from neuron A to B? Or see what nengo.Connection() returns.")
 
 #-------------------------------------------------------------------------------
 # Establishes a connexion between two populations, following the results of LG14
@@ -936,18 +981,22 @@ BGparams = {'MSN':MSNparams,
             'Prot':Protparams,
             'GPi':GPiparams}
 
-def initNeuronTypes(params, commonNeuronType):
-  neuronType = {}
-  for pop in params:
-    commonNeuronType = nengo.neurons.LIF(tau_rc=params[pop]['tau_m']/1000., tau_ref=commonNeuronType.tau_ref, min_voltage=commonNeuronType.min_voltage)
-    type_pop.label = 'neuron type ' + pop
-    type_pop.params = copy.deepcopy(commonNeuronType.params)
-    type_pop.params['V_th'] = params[pop]['V_th']
+  
 
-    neuronType[pop] = type_pop
-  return neuronType
+if use_nengo():
+  def initNeuronTypes(params, commonNeuronType):
+    neuronType = {}
+    for pop in params:
+      commonNeuronType = nengo.neurons.LIF(tau_rc=params[pop]['tau_m']/1000., tau_ref=commonNeuronType.tau_ref, min_voltage=commonNeuronType.min_voltage)
+      type_pop.label = 'neuron type ' + pop
+      type_pop.params = copy.deepcopy(commonNeuronType.params)
+      type_pop.params['V_th'] = params[pop]['V_th']
 
-neuronTypes = initNeuronTypes(BGparams, commonNeuronType)
+      neuronType[pop] = type_pop
+    return neuronType
+
+  neuronTypes = initNeuronTypes(BGparams, commonNeuronType)
+
 
 Pop = {}
 Fake= {} # Fake contains the Poisson Generators, that will feed the parrot_neurons, stored in Pop
