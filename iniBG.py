@@ -39,7 +39,7 @@ def createBG():
       update_Ie = lambda p: nest.SetStatus(Pop[p],{"I_e":params['Ie'+p]})
     elif use_nengo():
       def update_Ie(p):
-        Ie = Pop[p].Ie
+        Ie = Pop[p].Ie.pre
         if Ie.label[:2] != 'Ie':
           print(Ie)
           raise LookupError(p+'.Ie is not Ie node')
@@ -56,7 +56,7 @@ def createBG():
     elif use_nengo():
       def update_Ie(p):
         for i in range(len(Pop[p])):
-          Ie = Pop[p][i].Ie
+          Ie = Pop[p][i].Ie.pre
           if Ie.label[:2] != 'Ie':
             print(Ie)
             raise LookupError(p+str(i)+'.Ie is not Ie node')

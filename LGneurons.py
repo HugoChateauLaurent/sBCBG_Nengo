@@ -277,6 +277,33 @@ def connectivity_matrix(rule, parameter, n_pre, n_post):
 
   return connectivity
 
+#------------------------------------------------------------------------------
+# Nengo only:
+#------------------------------------------------------------------------------
+class Delay(object):
+  def __init__(self, dimensions, timesteps):
+    self.history = np.zeros((timesteps, dimensions))
+  def step(self, t, x):
+    self.history = np.roll(self.history, -1)
+    self.history[-1] = x
+    return self.history[0]
+
+def delayed_connection(pre, post, delay, transform, synapse):
+
+  delayNode = nengo.Node(Delay(pre.n_neurons, int(delay / 1000. / dt)).step, 
+                          size_in=pre.n_neurons, 
+                          size_out=pre.n_neurons)
+
+  pre_to_delay = nengo.Connection(pre.neurons, delayNode, 
+                                  transform=np.ones((pre.n_neurons)),
+                                  synapse=None)
+
+  delay_to_post = nengo.Connection(delayNode, dest.neurons, 
+                                    transform=transform, 
+                                    synapse=synapse)
+
+  return {'pre_to_delay':pre_to_delay, 'delay_to_post':delay_to_post}
+
 
 
 
@@ -288,6 +315,7 @@ def connectivity_matrix(rule, parameter, n_pre, n_post):
 # - `inDegree`, `receptor_type`, `weight`, `delay` are Nest connection params
 #------------------------------------------------------------------------------
 def mass_connect(source, dest, synapse_label, inDegree, receptor_type, weight, delay, stochastic_delays=None, verbose=False):
+  print('delay',delay)
   def printv(text):
     if verbose:
       print(text)
@@ -327,11 +355,15 @@ def mass_connect(source, dest, synapse_label, inDegree, receptor_type, weight, d
     elif use_nengo():
       if stochastic_delays:
         raise NotImplementedError("TODONengo: delay distribution")
-      source.efferents.append(nengo.Connection(source.neurons, dest.neurons, 
-      						  transform=connectivity_matrix('fixed_indegree', integer_inDegree, source.n_neurons, dest.n_neurons)*weight*exp(1)*dest.neuron_type.params['tau_syn'][receptor_type]/1000./dest.neuron_type.params['V_th'], 
-      						  synapse=Alpha(dest.neuron_type.params['tau_syn'][receptor_type], 
-                    label=synapse_label)))
-      raise NotImplementedError("TODONengo: delay. See https://www.nengo.ai/nengo/examples/usage/delay_node.html")
+      
+      connectivity = connectivity_matrix('fixed_indegree', integer_inDegree, source.n_neurons, dest.n_neurons)
+      nengo_weight = weight*exp(1)*dest.neuron_type.params['tau_syn'][receptor_type]/1000./dest.neuron_type.params['V_th']
+      connection = delayed_connection(source, dest, delay, connectivity*nengo_weight, Alpha(dest.neuron_type.params['tau_syn'][receptor_type], label=synapse_label))
+
+      #store weight to retrieve connectivity matrix in mass_mirror:
+      connection['delay_to_post'].weight = nengo_weight
+
+      source.efferents.append(connection)
 
   # The second `fixed_total_number` connection distributes remaining axonal
   # contacts at random (i.e. the remaining fractional part after the first step)
@@ -345,13 +377,19 @@ def mass_connect(source, dest, synapse_label, inDegree, receptor_type, weight, d
                    {'rule': 'fixed_total_number', 'N': int(remaining_connections)},
                    {'model': 'static_synapse_lbl', 'synapse_label': synapse_label, 'receptor_type': receptor_type, 'weight': weight, 'delay':delay})
     elif use_nengo():
+      
       if stochastic_delays:
         raise NotImplementedError("TODONengo: delay distribution")
-      source.efferents.append(nengo.Connection(source.neurons, dest.neurons, 
-                    transform=connectivity_matrix('fixed_total_number', int(remaining_connections), source.n_neurons, dest.n_neurons)*weight*exp(1)*dest.neuron_type.params['tau_syn'][receptor_type]/1000./dest.neuron_type.params['V_th'], 
-                    synapse=Alpha(dest.neuron_type.params['tau_syn'][receptor_type], 
-                    label=synapse_label)))
-      raise NotImplementedError("TODONengo: delay. See https://www.nengo.ai/nengo/examples/usage/delay_node.html")
+      
+      connectivity = connectivity_matrix('fixed_total_number', int(remaining_connections), source.n_neurons, dest.n_neurons)
+      nengo_weight = weight*exp(1)*dest.neuron_type.params['tau_syn'][receptor_type]/1000./dest.neuron_type.params['V_th']
+      connection = delayed_connection(source, dest, delay, connectivity*nengo_weight, Alpha(dest.neuron_type.params['tau_syn'][receptor_type], label=synapse_label))
+      
+      #store weight to retrieve connectivity matrix in mass_mirror:
+      connection['delay_to_post'].weight = nengo_weight
+
+      source.efferents.append(connection)
+
 #------------------------------------------------------------------------------
 # Routine to duplicate a connection made with a specific receptor, with another
 # receptor (typically to add NMDA connections to existing AMPA connections)
@@ -360,34 +398,51 @@ def mass_connect(source, dest, synapse_label, inDegree, receptor_type, weight, d
 # - `receptor_type`, `weight`, `delay` are Nest connection params
 #------------------------------------------------------------------------------
 def mass_mirror(source, synapse_label, receptor_type, weight, delay, stochastic_delays, verbose=False):
+
   def printv(text):
     if verbose:
       print(text)
 
   # find all AMPA connections for the given projection type
   printv('looking for AMPA connections to mirror with NMDA...\n')
+  
   if use_nest():
     ampa_conns = nest.GetConnections(source=source, synapse_label=synapse_label)
+
   elif use_nengo():
-    raise NotImplementedError("Hint: nest.Connection returns <Connection from <Node (unlabeled) at 0x7fc374108860> to <Neurons of <Ensemble (unlabeled) at 0x7fc37415acc0>>>")
+    ampa_conns = [conn['delay_to_post'] for conn in source.efferents if conn['delay_to_post'].synapse.label==synapse_label]
+    for conn in ampa_conns:
+      if not (np.round(np.array(conn.transform)/conn.weight)!=0).any():
+        print("Nengo implementation warning: empty connection in mass mirror. See proposed solution below.")
+        # proposed solution: [conn for conn in source.efferents if conn.synapse.label==synapse_label and (np.round(np.array(conn.transform)/conn.weight)!=0).any()]
+  
   # in rare cases, there may be no connections, guard against that
   if ampa_conns:
     # extract just source and target GID lists, all other information is irrelevant here
     printv('found '+str(len(ampa_conns))+' AMPA connections\n')
+    
     if stochastic_delays != None and delay > 0:
       if use_nengo():
         raise NotImplementedError("TODONengo: delay distribution")
       printv('Using stochastic delays in mass-mirror')
-    if use_nest():
       delay = np.array(nest.GetStatus(ampa_conns, keys=['delay'])).flatten()
+    
+    if use_nest():
       src, tgt, _, _, _ = zip(*ampa_conns)
-      print('mass_mirror',str(src), str(tgt))
       nest.Connect(src, tgt, 'one_to_one',
                    {'model': 'static_synapse_lbl',
                     'synapse_label': synapse_label, # tag with the same number (doesn't matter)
                     'receptor_type': receptor_type, 'weight': weight, 'delay':delay})
     if use_nengo():
-      raise NotImplementedError("TODONengo: store connectivity matrix to know how many connections from neuron A to B? Or see what nengo.Connection() returns.")
+      for conn in ampa_conns:        
+        connectivity = np.array(conn.transform)/conn.weight
+        nengo_weight = weight*exp(1)*conn.post.neuron_type.params['tau_syn'][receptor_type]/1000./conn.post.neuron_type.params['V_th']        
+        connection = delayed_connection(source, conn.post, delay, connectivity*nengo_weight, Alpha(dest.neuron_type.params['tau_syn'][receptor_type], label=synapse_label))
+        
+        #store weight to retrieve connectivity matrix in mass_mirror:
+        connection['delay_to_post'].weight = nengo_weight
+
+        source.efferents.append(connection)
 
 #-------------------------------------------------------------------------------
 # Establishes a connexion between two populations, following the results of LG14
