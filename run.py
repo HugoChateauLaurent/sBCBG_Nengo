@@ -418,6 +418,7 @@ class JobDispatcher:
     
     # performs the recurrent exploration of parameterizations to run
     for param in self.params:
+      param['simulator'] = self.cmd_args.simulator
       param['platform'] = self.cmd_args.platform
       self.recParamExplo(param)
 
@@ -443,6 +444,7 @@ def main():
     Optional.add_argument('--nestSeed', type=int, help='Nest seed (affects the Poisson spike train generator)', default=None)
     Optional.add_argument('--pythonSeed', type=int, help='Python seed (affects connection map)', default=None)
     Optional.add_argument('--mock', action="store_true", help='Does not start the simulation, only writes experiment-specific directories', default=False)
+    Optional.add_argument('--simulator', type=str, help='Simulator used (NEST or Nengo)', default='NEST')
 
     
     cmd_args = parser.parse_args()
