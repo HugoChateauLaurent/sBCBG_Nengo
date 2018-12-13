@@ -2,18 +2,21 @@
 # -*- coding: utf-8 -*-
 
 
-import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import nengo.utils.matplotlib
+import pylab
+
 import pylab as pl
 import os
-import nstrand
 import sys
 import csv
 import numpy as np
 import numpy.random as rnd
 from math import sqrt, cosh, exp, pi
 import copy
+from PoissonGenerator import *
+
+dt = .001 # ms
 
 use_nest=lambda: 'simulator' not in params or params['simulator']=='NEST'
 use_nengo=lambda: 'simulator' in params and params['simulator']=='Nengo'
@@ -24,9 +27,9 @@ if use_nest():
   import nest.raster_plot as raster
   import nest
 elif use_nengo():
-	import nengo
-	from nengo.synapses import Alpha
-	nengoNet = nengo.Network(seed=params['nestSeed'])
+  import nengo
+  from nengo.synapses import Alpha
+  nengoNet = nengo.Network(seed=params['nestSeed'])
 
 
 #------------------------------------------
@@ -51,9 +54,9 @@ def loadLG14params(ID):
   for row in LG14SolutionsReader:
     LG14Solutions.append(row)
 
-  print '### Parameterization #'+str(ID)+' from (Lienard & Girard, 2014) is used. ###'
+  print('### Parameterization #'+str(ID)+' from (Lienard & Girard, 2014) is used. ###')
 
-  for k,v in alpha.iteritems():
+  for k,v in alpha.items():
     try:
       if k == 'Arky->MSN':
         alpha[k] = round(float(LG14Solutions[ID]['ALPHA_GPe_MSN']),0)
@@ -86,9 +89,9 @@ def loadLG14params(ID):
       else:
         alpha[k] = round(float(LG14Solutions[ID]['ALPHA_'+k.replace('->','_')]),0) 
     except:
-      print('Could not find LG14 parameters for connection `'+k+'`, trying to run anyway.')
+      print(('Could not find LG14 parameters for connection `'+k+'`, trying to run anyway.'))
 
-  for k,v in p.iteritems():
+  for k,v in p.items():
       try:
         if k == 'Arky->MSN':
           p[k] = round(float(LG14Solutions[ID]['DIST_GPe_MSN']),2)
@@ -121,9 +124,9 @@ def loadLG14params(ID):
         else:
           p[k] = round(float(LG14Solutions[ID]['DIST_'+k.replace('->','_')]),2) 
       except:
-        print('Could not find LG14 parameters for connection `'+k+'`, trying to run anyway.')
+        print(('Could not find LG14 parameters for connection `'+k+'`, trying to run anyway.'))
 
-  for k,v in BGparams.iteritems():
+  for k,v in BGparams.items():
     try:
       if k == 'Arky':
           BGparams[k]['V_th'] = round(float(LG14Solutions[ID]['THETA_GPe']),1)
@@ -132,17 +135,17 @@ def loadLG14params(ID):
       else:
           BGparams[k]['V_th'] = round(float(LG14Solutions[ID]['THETA_'+k]),1)
     except:
-      print('Could not find LG14 parameters for connection `'+k+'`, trying to run anyway.')
+      print(('Could not find LG14 parameters for connection `'+k+'`, trying to run anyway.'))
 
 
 def loadThetaFromCustomparams(params):
-  for k,v in BGparams.iteritems():
+  for k,v in BGparams.items():
     try:
       newval = round(float(params['THETA_'+k]), 2)
-      print("WARNING: overwriting LG14 value for theta in "+k+" from original value of "+str(BGparams[k]['V_th'])+" to new value: "+str(newval))
+      print(("WARNING: overwriting LG14 value for theta in "+k+" from original value of "+str(BGparams[k]['V_th'])+" to new value: "+str(newval)))
       BGparams[k]['V_th'] = newval # firing threshold
     except:
-      print("INFO: keeping LG14 value for theta in "+k+" to its original value of "+str(BGparams[k]['V_th']))
+      print(("INFO: keeping LG14 value for theta in "+k+" to its original value of "+str(BGparams[k]['V_th'])))
       pass
 
 #-------------------------------------------------------------------------------
@@ -171,35 +174,48 @@ def initNeurons():
 #-------------------------------------------------------------------------------
 def create(name,fake=False,parrot=True):
   if nbSim[name] == 0:
-    print 'ERROR: create(): nbSim['+name+'] = 0'
+    print('ERROR: create(): nbSim['+name+'] = 0')
     exit()
+
   if fake:
     if rate[name] == 0:
-      print 'ERROR: create(): rate['+name+'] = 0 Hz'
-    print '* '+name+'(fake):',nbSim[name],'Poisson generators with avg rate:',rate[name]
+      print('ERROR: create(): rate['+name+'] = 0 Hz')
+    print('* '+name+'(fake):',nbSim[name],'Poisson generators with avg rate:',rate[name])
+
     if not parrot:
-      print "/!\ /!\ /!\ /!\ \nWARNING: parrot neurons not used, no correlations in inputs\n"
-      if use_nest():
+      print("/!\ /!\ /!\ /!\ \nWARNING: parrot neurons not used, no correlations in inputs\n")
+    
+    if use_nest():
+      if not parrot:
         Pop[name]  = nest.Create('poisson_generator',int(nbSim[name]))
         nest.SetStatus(Pop[name],{'rate':rate[name]})
-      elif use_nengo():
-        print('TODONengo: non parrot poisson')
-        #raise NotImplementedError("TODONengo: Nengo poisson see github.com/nengo/nengo/issues/1487")
         
-    else:
-      if use_nest():
+      else:      
         Fake[name]  = nest.Create('poisson_generator',int(nbSim[name]))
         nest.SetStatus(Fake[name],{'rate':rate[name]})
         Pop[name]  = nest.Create('parrot_neuron',int(nbSim[name]))
         nest.Connect(pre=Fake[name],post=Pop[name],conn_spec={'rule':'one_to_one'})
-      elif use_nengo():
-        print('TODONengo: Nengo poisson. currently no input')
-        #raise NotImplementedError("TODONengo: Nengo poisson see github.com/nengo/nengo/issues/1487")
-        
+
+    elif use_nengo():
+      with nengoNet:
+        poisson_node = nengo.Node(PoissonGenerator(rate[name], int(nbSim[name]), 
+                                                    seed=params['nestSeed'], dt=dt, parrot=parrot), 
+                                    size_in=int(nbSim[name]))
+        poisson_ens = nengo.Ensemble(int(nbSim[name]), 1, 
+                                      encoders=np.ones((int(nbSim[name]),1)), 
+                                      gain=np.ones((int(nbSim[name]))), 
+                                      bias=np.zeros((int(nbSim[name]))),
+                                      neuron_type=Parrot(),
+                                      label=name)
+
+        nengo.Connection(poisson_node, poisson_ens.neurons, synapse=None)
+        poisson_ens.efferents = []
+        Pop[name] = poisson_ens
+        print('TODONengo: seed and dt as parameters for Poisson generators')
 
 
   else:
-    print '* '+name+':',nbSim[name],'neurons with parameters:',BGparams[name]
+    print('* '+name+':',nbSim[name],'neurons with parameters:',BGparams[name])
     if use_nest():
       Pop[name] = nest.Create("iaf_psc_alpha_multisynapse",int(nbSim[name]),params=BGparams[name])
     elif use_nengo():
@@ -209,7 +225,7 @@ def create(name,fake=False,parrot=True):
                               bias=np.zeros((int(nbSim[name]))), 
                               neuron_type=neuronTypes[name], 
                               label=name)
-        # List of efferent connections with Ie=0 node:
+
         Pop[name].efferents = []
         Pop[name].Ie = nengo.Connection(nengo.Node([0], label='Ie node '+name), Pop[name], 
                           transform=1./Pop[name].neuron_type.params['V_th'], 
@@ -225,35 +241,52 @@ def create(name,fake=False,parrot=True):
 #-------------------------------------------------------------------------------
 def createMC(name,nbCh,fake=False,parrot=True):
   if nbSim[name] == 0:
-    print 'ERROR: create(): nbSim['+name+'] = 0'
+    print('ERROR: create(): nbSim['+name+'] = 0')
     exit()
 
   Pop[name]=[]
 
   if fake:
+    if rate[name] == 0:
+      print('ERROR: create(): rate['+name+'] = 0 Hz')
+    print('* '+name+'(fake):',nbSim[name],'Poisson generators with avg rate:',rate[name])
+
+    if not parrot:
+      print("/!\ /!\ /!\ /!\ \nWARNING: parrot neurons not used, no correlations in inputs\n")
+    
     if use_nest():
-      Fake[name]=[]
-      if rate[name] == 0:
-        print 'ERROR: create(): rate['+name+'] = 0 Hz'
-      print '* '+name+'(fake):',nbSim[name]*nbCh,'Poisson generators (divided in',nbCh,'channels) with avg rate:',rate[name]
       if not parrot:
-        print "/!\ /!\ /!\ /!\ \nWARNING: parrot neurons not used, no correlations in inputs\n"
         for i in range(nbCh):
           Pop[name].append(nest.Create('poisson_generator',int(nbSim[name])))
           nest.SetStatus(Pop[name][i],{'rate':rate[name]})
-      else:
+      else:      
         for i in range(nbCh):
           Fake[name].append(nest.Create('poisson_generator',int(nbSim[name])))
           nest.SetStatus(Fake[name][i],{'rate':rate[name]})
           Pop[name].append(nest.Create('parrot_neuron',int(nbSim[name])))
           nest.Connect(pre=Fake[name][i],post=Pop[name][i],conn_spec={'rule':'one_to_one'})
+
     elif use_nengo():
-      print('TODONengo: Nengo poisson. currently no input')
-      #raise NotImplementedError("TODONengo: Nengo poisson see github.com/nengo/nengo/issues/1487")
+      with nengoNet:
+        poisson_node = nengo.Node(PoissonGenerator(rate[name], int(nbSim[name]), 
+                                                    seed=params['nestSeed'], dt=dt, parrot=parrot), 
+                                    size_in=int(nbSim[name]))
+        for i in range(nbCh):            
+          poisson_ens = nengo.Ensemble(int(nbSim[name]), 1, 
+                                        encoders=np.ones((int(nbSim[name]),1)), 
+                                        gain=np.ones((int(nbSim[name]))), 
+                                        bias=np.zeros((int(nbSim[name]))),
+                                        neuron_type=Parrot(),
+                                        label=name+' ch'+str(i))
+
+          nengo.Connection(poisson_node, poisson_ens.neurons, synapse=None)
+          poisson_ens.efferents = []
+          Pop[name].append(poisson_ens)
+          print('TODONengo: seed and dt as parameters for Poisson generators')
       
 
   else:
-    print '* '+name+':',nbSim[name]*nbCh,'neurons (divided in',nbCh,'channels) with parameters:',BGparams[name]
+    print('* '+name+':',nbSim[name]*nbCh,'neurons (divided in',nbCh,'channels) with parameters:',BGparams[name])
     if use_nest():
       for i in range(nbCh):
         Pop[name].append(nest.Create("iaf_psc_alpha_multisynapse",int(nbSim[name]),params=BGparams[name]))
@@ -265,7 +298,6 @@ def createMC(name,nbCh,fake=False,parrot=True):
                                     bias=np.zeros((int(nbSim[name]))), 
                                     neuron_type=neuronTypes[name], 
                                     label=name+' ch'+str(i)))
-          # List of efferent connections with Ie=0 node:
           Pop[name][-1].efferents = []
           Pop[name][-1].Ie = nengo.Connection(nengo.Node([0], label='Ie node '+name+' ch'+str(i)), Pop[name][-1],
                                                                       transform=1./Pop[name][-1].neuron_type.params['V_th'], 
@@ -312,7 +344,7 @@ class Delay(object):
 
 def delayed_connection(pre, post, delay, transform, synapse):
   with nengoNet:
-    delayNode = nengo.Node(Delay(pre.n_neurons, int(delay / 1000. / dt)).step, 
+    delayNode = nengo.Node(Delay(pre.n_neurons, int((delay/1000.) / dt)).step, 
                             size_in=pre.n_neurons, 
                             size_out=pre.n_neurons)
 
@@ -320,7 +352,7 @@ def delayed_connection(pre, post, delay, transform, synapse):
                                     transform=np.ones((pre.n_neurons)),
                                     synapse=None)
 
-    delay_to_post = nengo.Connection(delayNode, dest.neurons, 
+    delay_to_post = nengo.Connection(delayNode, post.neurons, 
                                       transform=transform, 
                                       synapse=synapse)
 
@@ -350,7 +382,7 @@ def mass_connect(source, dest, synapse_label, inDegree, receptor_type, weight, d
     if sigmaDependentInterval:
       n = 2 # number of standard deviation to include in the distribution
       if stochastic_delays >= 1./n:
-        print 'Error : stochastic_delays >= 1/n and the distribution of delays therefore includes 0 which is not possible -> Jean\'s method is used'
+        print('Error : stochastic_delays >= 1/n and the distribution of delays therefore includes 0 which is not possible -> Jean\'s method is used')
         sigmaDependentInterval = False
       else:
         low = delay - n*sigma
@@ -376,10 +408,11 @@ def mass_connect(source, dest, synapse_label, inDegree, receptor_type, weight, d
     elif use_nengo():
       if stochastic_delays:
         raise NotImplementedError("TODONengo: delay distribution")
-      
-      connectivity = connectivity_matrix('fixed_indegree', integer_inDegree, source.n_neurons, dest.n_neurons)
-      nengo_weight = weight*exp(1)*dest.neuron_type.params['tau_syn'][receptor_type]/1000./dest.neuron_type.params['V_th']
-      connection = delayed_connection(source, dest, delay, connectivity*nengo_weight, Alpha(dest.neuron_type.params['tau_syn'][receptor_type], label=synapse_label))
+      connectivity = connectivity_matrix('fixed_indegree', int(integer_inDegree), source.n_neurons, dest.n_neurons)
+      nengo_weight = weight*exp(1)*dest.neuron_type.params['tau_syn'][receptor_type-1]/1000./dest.neuron_type.params['V_th']
+      synapse = Alpha(dest.neuron_type.params['tau_syn'][receptor_type-1])
+      synapse.label = synapse_label
+      connection = delayed_connection(source, dest, delay, connectivity*nengo_weight, synapse)
 
       #store weight to retrieve connectivity matrix in mass_mirror:
       connection['delay_to_post'].weight = nengo_weight
@@ -403,8 +436,10 @@ def mass_connect(source, dest, synapse_label, inDegree, receptor_type, weight, d
         raise NotImplementedError("TODONengo: delay distribution")
       
       connectivity = connectivity_matrix('fixed_total_number', int(remaining_connections), source.n_neurons, dest.n_neurons)
-      nengo_weight = weight*exp(1)*dest.neuron_type.params['tau_syn'][receptor_type]/1000./dest.neuron_type.params['V_th']
-      connection = delayed_connection(source, dest, delay, connectivity*nengo_weight, Alpha(dest.neuron_type.params['tau_syn'][receptor_type], label=synapse_label))
+      nengo_weight = weight*exp(1)*dest.neuron_type.params['tau_syn'][receptor_type-1]/1000./dest.neuron_type.params['V_th']
+      synapse = Alpha(dest.neuron_type.params['tau_syn'][receptor_type-1])
+      synapse.label = synapse_label
+      connection = delayed_connection(source, dest, delay, connectivity*nengo_weight, synapse)
       
       #store weight to retrieve connectivity matrix in mass_mirror:
       connection['delay_to_post'].weight = nengo_weight
@@ -449,7 +484,7 @@ def mass_mirror(source, synapse_label, receptor_type, weight, delay, stochastic_
       delay = np.array(nest.GetStatus(ampa_conns, keys=['delay'])).flatten()
     
     if use_nest():
-      src, tgt, _, _, _ = zip(*ampa_conns)
+      src, tgt, _, _, _ = list(zip(*ampa_conns))
       nest.Connect(src, tgt, 'one_to_one',
                    {'model': 'static_synapse_lbl',
                     'synapse_label': synapse_label, # tag with the same number (doesn't matter)
@@ -457,8 +492,10 @@ def mass_mirror(source, synapse_label, receptor_type, weight, delay, stochastic_
     if use_nengo():
       for conn in ampa_conns:        
         connectivity = np.array(conn.transform)/conn.weight
-        nengo_weight = weight*exp(1)*conn.post.neuron_type.params['tau_syn'][receptor_type]/1000./conn.post.neuron_type.params['V_th']        
-        connection = delayed_connection(source, conn.post, delay, connectivity*nengo_weight, Alpha(dest.neuron_type.params['tau_syn'][receptor_type], label=synapse_label))
+        nengo_weight = weight*exp(1)*conn.post.ensemble.neuron_type.params['tau_syn'][receptor_type-1]/1000./conn.post.ensemble.neuron_type.params['V_th']        
+        synapse = Alpha(conn.post.ensemble.neuron_type.params['tau_syn'][receptor_type-1])
+        synapse.label = synapse_label
+        connection = delayed_connection(source, conn.post.ensemble, delay, connectivity*nengo_weight, synapse)
         
         #store weight to retrieve connectivity matrix in mass_mirror:
         connection['delay_to_post'].weight = nengo_weight
@@ -575,7 +612,7 @@ def connectMC(type, nameSrc, nameTgt, projType, redundancy, RedundancyType, LCGD
 
   if source_channels == None:
     # if not specified, assume that the connection originates from all channels
-    source_channels = range(len(Pop[nameSrc]))
+    source_channels = list(range(len(Pop[nameSrc])))
 
   if RedundancyType == 'inDegreeAbs':
     # inDegree is already provided in the right form
@@ -665,14 +702,14 @@ def get_input_range(nameSrc, nameTgt, cntSrc, cntTgt, verbose=False):
     nu = alpha[nameSrc+'->'+nameTgt]
     nu0 = 0
     if verbose:
-      print('\tMaximal number of distinct input neurons (nu): '+str(nu))
+      print(('\tMaximal number of distinct input neurons (nu): '+str(nu)))
       print('\tMinimal number of distinct input neurons     : unknown (set to 0)')
   else:
     nu = cntSrc / float(cntTgt) * P[nameSrc+'->'+nameTgt] * alpha[nameSrc+'->'+nameTgt]
     nu0 = cntSrc / float(cntTgt) * P[nameSrc+'->'+nameTgt]
     if verbose:
-      print('\tMaximal number of distinct input neurons (nu): '+str(nu))
-      print('\tMinimal number of distinct input neurons     : '+str(nu0))
+      print(('\tMaximal number of distinct input neurons (nu): '+str(nu)))
+      print(('\tMinimal number of distinct input neurons     : '+str(nu0)))
   return [nu0, nu]
 
 #-------------------------------------------------------------------------------
@@ -688,7 +725,7 @@ def get_frac(FractionalOutDegree, nameSrc, nameTgt, cntSrc, cntTgt, useMin=False
     r = get_input_range(nameSrc, nameTgt, cntSrc, cntTgt, verbose=verbose)
     inDegree = (r[1] - r[0]) * FractionalOutDegree + r[0]
   if verbose:
-    print('\tConverting the fractional outDegree of '+nameSrc+' -> '+nameTgt+' from '+str(FractionalOutDegree)+' to inDegree neuron count: '+str(round(inDegree, 2))+' (relative to minimal value possible? '+str(useMin)+')')
+    print(('\tConverting the fractional outDegree of '+nameSrc+' -> '+nameTgt+' from '+str(FractionalOutDegree)+' to inDegree neuron count: '+str(round(inDegree, 2))+' (relative to minimal value possible? '+str(useMin)+')'))
   return inDegree
 
 #-------------------------------------------------------------------------------
@@ -697,7 +734,7 @@ def get_frac(FractionalOutDegree, nameSrc, nameTgt, cntSrc, cntTgt, useMin=False
 def computeW(listRecType, nameSrc, nameTgt, inDegree, gain=1.,verbose=False):
   nu = get_input_range(nameSrc, nameTgt, neuronCounts[nameSrc], neuronCounts[nameTgt], verbose=verbose)[1]
   if verbose:
-    print '\tCompare with the effective chosen inDegree   :',str(inDegree)
+    print('\tCompare with the effective chosen inDegree   :',str(inDegree))
 
   # attenuation due to the distance from the receptors to the soma of tgt:
   attenuation = cosh(LX[nameTgt]*(1-p[nameSrc+'->'+nameTgt])) / cosh(LX[nameTgt])
@@ -709,9 +746,6 @@ def computeW(listRecType, nameSrc, nameTgt, inDegree, gain=1.,verbose=False):
   return w
 
 #-------------------------------------------------------------------------------
-
-dt = 0.01 # ms
-simDuration = 10000. # in ms
 
 # Acceptable firing rate ranges (FRR) in normal and deactivation experiments
 # extracted from LG14 Table 5
@@ -775,6 +809,7 @@ neuronCounts={'MSN': 26448.0E3,
              }
 
 # Number of neurons that will be simulated
+
 nbSim = {'MSN': 0.,
          'FSI': 0.,
          'STN': 0.,
@@ -1118,12 +1153,12 @@ def createBG():
   #==========================
   # Creation of neurons
   #-------------------------
-  print '\nCreating neurons\n================'
+  print('\nCreating neurons\n================')
 
   # single or multi-channel?
   if params['nbCh'] == 1:
     def create_pop(*args, **kwargs):
-      if 'nbCh' in kwargs.keys():
+      if 'nbCh' in list(kwargs.keys()):
         # remove the extra arg
         kwargs.pop("nbCh", None)
       create(*args, **kwargs)
@@ -1139,7 +1174,7 @@ def createBG():
         Ie.output = params['Ie'+p]
   else:
     def create_pop(*args, **kwargs):
-      if 'nbCh' not in kwargs.keys():
+      if 'nbCh' not in list(kwargs.keys()):
         # enforce the default
         kwargs['nbCh'] = params['nbCh']
       createMC(*args, **kwargs)
@@ -1188,7 +1223,7 @@ def createBG():
 
   parrot = True # switch to False at your risks & perils...
   nbSim['CSN'] = params['nbCSN']
-  if 'nbCues' in params.keys():
+  if 'nbCues' in list(params.keys()):
     # cue channels are present
     CSNchannels = params['nbCh']+params['nbCues']
   else:
@@ -1201,7 +1236,7 @@ def createBG():
   nbSim['CMPf'] = params['nbCMPf']
   create_pop('CMPf', fake=True, parrot=params['parrotCMPf']) # was: False
 
-  print "Number of simulated neurons:", nbSim
+  print("Number of simulated neurons:", nbSim)
 
 #------------------------------------------
 # Connects the populations of a previously created multi-channel BG circuit
@@ -1213,41 +1248,41 @@ def connectBG(antagInjectionSite,antag):
     connect_pop = lambda *args, **kwargs: connect(*args, RedundancyType=params['RedundancyType'], stochastic_delays=params['stochastic_delays'], **kwargs)
   else:
     def connect_pop(*args, **kwargs):
-      if 'source_channels' not in kwargs.keys():
+      if 'source_channels' not in list(kwargs.keys()):
         # enforce the default
-        kwargs['source_channels'] = range(params['nbCh'])
+        kwargs['source_channels'] = list(range(params['nbCh']))
       return connectMC(*args, RedundancyType=params['RedundancyType'], stochastic_delays=params['stochastic_delays'], **kwargs)
 
   #-------------------------
   # connection of populations
   #-------------------------
-  print '\nConnecting neurons\n================'
-  print "**",antag,"antagonist injection in",antagInjectionSite,"**"
-  print '* MSN Inputs'
-  if 'nbCues' not in params.keys():
+  print('\nConnecting neurons\n================')
+  print("**",antag,"antagonist injection in",antagInjectionSite,"**")
+  print('* MSN Inputs')
+  if 'nbCues' not in list(params.keys()):
     # usual case: CSN have as the same number of channels than the BG nuclei
     CSN_MSN = connect_pop('ex','CSN','MSN', projType=params['cTypeCSNMSN'], redundancy=params['redundancyCSNMSN'], gain=params['GCSNMSN'])
   else:
     # special case: extra 'cue' channels that target MSN
-    CSN_MSN = connect_pop('ex','CSN','MSN', projType=params['cTypeCSNMSN'], redundancy=params['redundancyCSNMSN'], gain=Params['GCSNMSN']/2., source_channels=range(params['nbCh']))
-    connect_pop('ex','CSN','MSN', projType='diffuse', redundancy=params['redundancyCSNMSN'], gain=params['GCSNMSN']/2., source_channels=range(params['nbCh'], params['nbCh']+params['nbCues']))
+    CSN_MSN = connect_pop('ex','CSN','MSN', projType=params['cTypeCSNMSN'], redundancy=params['redundancyCSNMSN'], gain=Params['GCSNMSN']/2., source_channels=list(range(params['nbCh'])))
+    connect_pop('ex','CSN','MSN', projType='diffuse', redundancy=params['redundancyCSNMSN'], gain=params['GCSNMSN']/2., source_channels=list(range(params['nbCh'], params['nbCh']+params['nbCues'])))
   PTN_MSN = connect_pop('ex','PTN','MSN', projType=params['cTypePTNMSN'], redundancy= params['redundancyPTNMSN'], gain=params['GPTNMSN'])
   CMPf_MSN = connect_pop('ex','CMPf','MSN',projType=params['cTypeCMPfMSN'],redundancy= params['redundancyCMPfMSN'],gain=params['GCMPfMSN'])
   connect_pop('in','MSN','MSN', projType=params['cTypeMSNMSN'], redundancy= params['redundancyMSNMSN'], gain=params['GMSNMSN'])
   connect_pop('in','FSI','MSN', projType=params['cTypeFSIMSN'], redundancy= params['redundancyFSIMSN'], gain=params['GFSIMSN'])
   # some parameterizations from LG14 have no STN->MSN or GPe->MSN synaptic contacts
   if alpha['STN->MSN'] != 0:
-    print "alpha['STN->MSN']",alpha['STN->MSN']
+    print("alpha['STN->MSN']",alpha['STN->MSN'])
     connect_pop('ex','STN','MSN', projType=params['cTypeSTNMSN'], redundancy= params['redundancySTNMSN'], gain=params['GSTNMSN'])
   if alpha['GPe->MSN'] != 0:
     if params['splitGPe']:
-      print "alpha['Arky->MSN']",alpha['Arky->MSN']
+      print("alpha['Arky->MSN']",alpha['Arky->MSN'])
       connect_pop('in','Arky','MSN', projType=params['cTypeArkyMSN'], redundancy= params['redundancyArkyMSN'], gain=params['GArkyMSN'])
     else:
-      print "alpha['GPe->MSN']",alpha['GPe->MSN']
+      print("alpha['GPe->MSN']",alpha['GPe->MSN'])
       connect_pop('in','GPe','MSN', projType=params['cTypeGPeMSN'], redundancy= params['redundancyGPeMSN'], gain=params['GGPeMSN'])
 
-  print '* FSI Inputs'
+  print('* FSI Inputs')
   connect_pop('ex','CSN','FSI', projType=params['cTypeCSNFSI'], redundancy= params['redundancyCSNFSI'], gain=params['GCSNFSI'])
   connect_pop('ex','PTN','FSI', projType=params['cTypePTNFSI'], redundancy= params['redundancyPTNFSI'], gain=params['GPTNFSI'])
   if alpha['STN->FSI'] != 0:
@@ -1260,7 +1295,7 @@ def connectBG(antagInjectionSite,antag):
   connect_pop('ex','CMPf','FSI',projType=params['cTypeCMPfFSI'],redundancy= params['redundancyCMPfFSI'],gain=params['GCMPfFSI'])
   connect_pop('in','FSI','FSI', projType=params['cTypeFSIFSI'], redundancy= params['redundancyFSIFSI'], gain=params['GFSIFSI'])
 
-  print '* STN Inputs'
+  print('* STN Inputs')
   connect_pop('ex','PTN','STN', projType=params['cTypePTNSTN'], redundancy= params['redundancyPTNSTN'],  gain=params['GPTNSTN'])
   connect_pop('ex','CMPf','STN',projType=params['cTypeCMPfSTN'],redundancy= params['redundancyCMPfSTN'], gain=params['GCMPfSTN'])
   if params['splitGPe']:
@@ -1269,8 +1304,8 @@ def connectBG(antagInjectionSite,antag):
     connect_pop('in','GPe','STN', projType=params['cTypeGPeSTN'], redundancy= params['redundancyGPeSTN'],  gain=params['GGPeSTN'])
   
   if params['splitGPe']:
-      print '* Arky Inputs'
-      if 'fakeArkyRecurrent' not in params.keys():
+      print('* Arky Inputs')
+      if 'fakeArkyRecurrent' not in list(params.keys()):
         # usual case: Arky's recurrent collaterals are handled normally
         Arky_recurrent_source = 'Arky'
       else:
@@ -1305,7 +1340,7 @@ def connectBG(antagInjectionSite,antag):
           connect_pop('ex','CMPf','Arky',projType=params['cTypeCMPfArky'],redundancy= params['redundancyCMPfArky'],gain=params['GCMPfArky'])
           connect_pop('ex','STN','Arky', projType=params['cTypeSTNArky'], redundancy= params['redundancySTNArky'], gain=params['GSTNArky'])
         else:
-          print antagInjectionSite,": unknown antagonist experiment:",antag
+          print(antagInjectionSite,": unknown antagonist experiment:",antag)
       else:
         connect_pop('ex','CMPf','Arky',projType=params['cTypeCMPfArky'],redundancy= params['redundancyCMPfArky'],gain=params['GCMPfArky'])
         connect_pop('ex','STN','Arky', projType=params['cTypeSTNArky'], redundancy= params['redundancySTNArky'], gain=params['GSTNArky'])
@@ -1313,8 +1348,8 @@ def connectBG(antagInjectionSite,antag):
         connect_pop('in','Prot','Arky', projType=params['cTypeProtArky'], redundancy= params['redundancyProtArky'], gain=params['GProtArky'])
         connect_pop('in', Arky_recurrent_source, 'Arky', projType=params['cTypeArkyArky'], redundancy= params['redundancyArkyArky'], gain=params['GArkyArky'])
         
-      print '* Prot Inputs'
-      if 'fakeProtRecurrent' not in params.keys():
+      print('* Prot Inputs')
+      if 'fakeProtRecurrent' not in list(params.keys()):
         # usual case: Prot's recurrent collaterals are handled normally
         Prot_recurrent_source = 'Prot'
       else:
@@ -1349,7 +1384,7 @@ def connectBG(antagInjectionSite,antag):
           connect_pop('ex','CMPf','Prot',projType=params['cTypeCMPfProt'],redundancy= params['redundancyCMPfProt'],gain=params['GCMPfProt'])
           connect_pop('ex','STN','Prot', projType=params['cTypeSTNProt'], redundancy= params['redundancySTNProt'], gain=params['GSTNProt'])
         else:
-          print antagInjectionSite,": unknown antagonist experiment:",antag
+          print(antagInjectionSite,": unknown antagonist experiment:",antag)
       else:
         connect_pop('ex','CMPf','Prot',projType=params['cTypeCMPfProt'],redundancy= params['redundancyCMPfProt'],gain=params['GCMPfProt'])
         connect_pop('ex','STN','Prot', projType=params['cTypeSTNProt'], redundancy= params['redundancySTNProt'], gain=params['GSTNProt'])
@@ -1358,8 +1393,8 @@ def connectBG(antagInjectionSite,antag):
         connect_pop('in', Prot_recurrent_source, 'Prot', projType=params['cTypeProtProt'], redundancy= params['redundancyProtProt'], gain=params['GProtProt'])
         
   else:
-      print '* GPe Inputs'
-      if 'fakeGPeRecurrent' not in params.keys():
+      print('* GPe Inputs')
+      if 'fakeGPeRecurrent' not in list(params.keys()):
         # usual case: GPe's recurrent collaterals are handled normally
         GPe_recurrent_source = 'GPe'
       else:
@@ -1392,14 +1427,14 @@ def connectBG(antagInjectionSite,antag):
           connect_pop('ex','CMPf','GPe',projType=params['cTypeCMPfGPe'],redundancy= params['redundancyCMPfGPe'],gain=params['GCMPfGPe'])
           connect_pop('ex','STN','GPe', projType=params['cTypeSTNGPe'], redundancy= params['redundancySTNGPe'], gain=params['GSTNGPe'])
         else:
-          print antagInjectionSite,": unknown antagonist experiment:",antag
+          print(antagInjectionSite,": unknown antagonist experiment:",antag)
       else:
         connect_pop('ex','CMPf','GPe',projType=params['cTypeCMPfGPe'],redundancy= params['redundancyCMPfGPe'],gain=params['GCMPfGPe'])
         connect_pop('ex','STN','GPe', projType=params['cTypeSTNGPe'], redundancy= params['redundancySTNGPe'], gain=params['GSTNGPe'])
         connect_pop('in','MSN','GPe', projType=params['cTypeMSNGPe'], redundancy= params['redundancyMSNGPe'], gain=params['GMSNGPe'])
         connect_pop('in', GPe_recurrent_source, 'GPe', projType=params['cTypeGPeGPe'], redundancy= params['redundancyGPeGPe'], gain=params['GGPeGPe'])
 
-  print '* GPi Inputs'
+  print('* GPi Inputs')
   if antagInjectionSite =='GPi':
     if   antag == 'AMPA+NMDA+GABAA':
       pass
@@ -1429,7 +1464,7 @@ def connectBG(antagInjectionSite,antag):
       connect_pop('ex','STN','GPi', projType=params['cTypeSTNGPi'], redundancy= params['redundancySTNGPi'], gain=params['GSTNGPi'])
       connect_pop('ex','CMPf','GPi',projType=params['cTypeCMPfGPi'],redundancy= params['redundancyCMPfGPi'],gain=params['GCMPfGPi'])
     else:
-      print antagInjectionSite,": unknown antagonist experiment:",antag
+      print(antagInjectionSite,": unknown antagonist experiment:",antag)
   else:
     connect_pop('in','MSN','GPi', projType=params['cTypeMSNGPi'], redundancy= params['redundancyMSNGPi'], gain=params['GMSNGPi'])
     connect_pop('ex','STN','GPi', projType=params['cTypeSTNGPi'], redundancy= params['redundancySTNGPi'], gain=params['GSTNGPi'])
@@ -1529,14 +1564,15 @@ def instantiate_BG(params={}, antagInjectionSite='none', antag=''):
     if 'nbcpu' in params:
       nest.SetKernelStatus({'local_num_threads': params['nbcpu']})
 
-  nstrand.set_seed(params['nestSeed'], params['pythonSeed']) # sets the seed for the BG construction
+  #nstrand.set_seed(params['nestSeed'], params['pythonSeed']) # sets the seed for the BG construction
 
   if use_nest():
     nest.SetKernelStatus({"data_path": dataPath})
-  #nest.SetKernelStatus({"resolution": 0.005}) # simulates with a higher precision
+    nest.SetKernelStatus({"resolution": dt*1000.}) # simulates with a higher precision
+  #nest.SetKernelStatus({"resolution": 0.005*1000.}) # simulates with a higher precision
   initNeurons()
 
-  print '/!\ Using the following LG14 parameterization',params['LG14modelID']
+  print('/!\ Using the following LG14 parameterization',params['LG14modelID'])
   loadLG14params(params['LG14modelID'])
   loadThetaFromCustomparams(params)
 
@@ -1586,8 +1622,7 @@ def instantiate_BG(params={}, antagInjectionSite='none', antag=''):
 # End iniBG.py
 #------------------------------------------
 
-from spikeProcessing import FanoFactor, OscIndex
-from filter import lowpass
+
 import os
 import numpy as np
 
@@ -1613,7 +1648,7 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
   if use_nest():
     nest.ResetNetwork()
   elif use_nengo():
-  	print('TODONengo: ResetNetwork')
+    print('TODONengo: ResetNetwork')
     #raise NotImplementedError("TODONengo: ResetNetwork")
 
   initNeurons()
@@ -1624,17 +1659,14 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
   if use_nest():
     nest.SetKernelStatus({"overwrite_files":True}) # when we redo the simulation, we erase the previous traces
 
-  nstrand.set_seed(params['nestSeed'], params['pythonSeed']) # sets the seed for the simulation
+  #nstrand.set_seed(params['nestSeed'], params['pythonSeed']) # sets the seed for the simulation
 
   if use_nest():
     simulationOffset = nest.GetKernelStatus('time')
-    print('Simulation Offset: '+str(simulationOffset))
-  elif use_nengo():
-    raise NotImplementedError("TODONengo: get time simulationOffset")
+    print(('Simulation Offset: '+str(simulationOffset)))
   
-  
-  offsetDuration = 2500. # ms
-  simDuration = 2500. # ms
+  offsetDuration = .25 # s
+  simDuration = .25 # s
 
   if use_nest():
     # single or multi-channel?
@@ -1647,7 +1679,17 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
       disconnect_detector= lambda N: [nest.Disconnect(Pop[N][i], spkDetect[N]) for i in range(len(Pop[N]))]
       connect_multimeter = lambda N: nest.Connect(multimeters[N], [Pop[N][0][0]])
   elif use_nengo():
-    raise NotImplementedError("TODONengo: multimeter probing")
+    # single or multi-channel?
+    if params['nbCh'] == 1:
+      probe = lambda N: nengo.Probe(Pop[N].neurons)
+    else:
+      probe = lambda N: [nengo.Probe(Pop[N][i].neurons) for i in range(len(Pop[N]))]
+
+    # single or multi-channel?
+    if params['nbCh'] == 1:
+      probe_fake = lambda N: nengo.Probe(Fake[N])
+    else:
+      probe_fake = lambda N: [nengo.Probe(Fake[N][i]) for i in range(len(Fake[N]))]
 
   #-------------------------
   # measures
@@ -1684,24 +1726,26 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
         nest.SetStatus(voltmeters[N], {"withtime":True, 'interval': time_step*1000})
         nest.Connect(voltmeters[N], [Pop[N][x] for x in range(len(Pop[N])) if x<maxRecord])
   elif use_nengo():
-    raise NotImplementedError("TODONengo: multimeter probing")
-
+    with nengoNet:
+      probes = {}
+      for N in list(Pop.keys()):
+        probes[N] = probe(N)
 
   #-------------------------
   # Simulation
   #-------------------------
   if use_nest():
-    nest.Simulate(simDuration+offsetDuration)
+    nest.Simulate((simDuration+offsetDuration)*1000.)
   elif use_nengo():
-    with nengo.Simulator(model, dt=dt) as sim:
-      sim.run(simDuration+offsetDuration)
+    sim = nengo.Simulator(nengoNet, dt=dt)
+    sim.run(simDuration+offsetDuration)
 
   score = 0
 
   text=[]
   frstr = "#" + str(params['LG14modelID'])+ " , " + antagInjectionSite + ', '
   s = '----- RESULTS -----'
-  print s
+  print(s)
   text.append(s+'\n')
   if antagInjectionSite == 'none':
     validationStr = "\n#" + str(params['LG14modelID']) + " , "
@@ -1717,12 +1761,24 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
       b = 30
       PSmetrics = {}
       
+    '''i=0
+    for N in ['CSN','CMPf','PTN']:
+      i+=1
+      plt.figure(figsize=(18,6))
+      plt.subplot(3,1,i)
+      nengo.utils.matplotlib.rasterplot(sim.trange(), sim.data[probes[N]])
+      plt.title(N+' '+str(sim.data[probes[N]].mean()))
+    plt.show()'''
     for N in NUCLEI:
       strTestPassed = 'NO!'
       if use_nest():
         expeRate[N] = nest.GetStatus(spkDetect[N], 'n_events')[0] / float(nbSim[N]*simDuration*params['nbCh']) * 1000
       elif use_nengo():
-        raise NotImplementedError("TODONengo: get events")
+        expeRate[N] = sim.data[probes[N]].mean()
+        nengo.utils.matplotlib.rasterplot(sim.trange(), sim.data[probes[N]])
+        plt.plot(sim.trange(), sim.data[probes[N]])
+        plt.title(N+' '+str(sim.data[probes[N]].mean()))
+        plt.show()
       if expeRate[N] <= FRRNormal[N][1] and expeRate[N] >= FRRNormal[N][0]:
         # if the measured rate is within acceptable values
         strTestPassed = 'OK'
@@ -1739,7 +1795,7 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
 
       frstr += '%f , ' %(expeRate[N])
       s = '* '+N+' - Rate: '+str(expeRate[N])+' Hz -> '+strTestPassed+' ('+str(FRRNormal[N][0])+' , '+str(FRRNormal[N][1])+')'
-      print s
+      print(s)
       text.append(s+'\n')
       restFR[N] = str(expeRate[N])
 
@@ -1759,7 +1815,7 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
 
           # save LFP plots
           if True:
-            plt.plot(range(len(Vm[500:1000])), Vm[500:1000],color='black', linewidth=.5) # plot from 500 to 1000ms
+            plt.plot(list(range(len(Vm[500:1000]))), Vm[500:1000],color='black', linewidth=.5) # plot from 500 to 1000ms
             plt.title(N+' LFP ('+str(nbNeurons)+' neurons)')
             plt.savefig('plots/'+N+' LFP.pdf')
             plt.close()
@@ -1916,16 +1972,16 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
             validationStr += N + "_" + antag + "=%.2f , " % difference
 
         s = '* '+N+' with '+antag+' antagonist(s): '+str(expeRate[N])+' Hz -> '+strTestPassed+' ('+str(FRRAnt[N][antag][0])+' , '+str(FRRAnt[N][antag][1])+')'
-        print s
+        print(s)
         text.append(s+'\n')
       else:
         s = '* '+N+' - Rate: '+str(expeRate[N])+' Hz'
-        print s
+        print(s)
         text.append(s+'\n')
       frstr += '%f , ' %(expeRate[N])
 
   s = '-------------------'
-  print s
+  print(s)
   text.append(s+'\n')
 
   frstr+='\n'
@@ -1965,7 +2021,7 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
         plt.savefig("plots/"+N+'_rastePlot.pdf') 
         plt.close()
       except AttributeError:
-        print 'A neuron of the '+N+' didn\'t spike which caused an error in the raster plot --> skipping'
+        print('A neuron of the '+N+' didn\'t spike which caused an error in the raster plot --> skipping')
 
         
   if showRasters and interactive:
@@ -2000,7 +2056,7 @@ def main(): # used
   deactivationTests = False
 
   if len(sys.argv) >= 2:
-    print "Command Line Parameters"
+    print("Command Line Parameters")
     paramKeys = ['LG14modelID',
                  'nbMSN',
                  'nbFSI',
@@ -2040,16 +2096,16 @@ def main(): # used
                  'inDegGPeGPi',
                  'inDegCMPfGPi',
                  ]
-    print sys.argv
+    print(sys.argv)
     if len(sys.argv) == len(paramKeys)+1:
-      print "Using command line parameters"
-      print sys.argv
+      print("Using command line parameters")
+      print(sys.argv)
       i = 0
       for k in paramKeys:
         i+=1
         params[k] = float(sys.argv[i])
     else :
-      print "Incorrect number of parameters:",len(sys.argv),"-",len(paramKeys),"expected"
+      print("Incorrect number of parameters:",len(sys.argv),"-",len(paramKeys),"expected")
 
   if use_nest():
     nest.set_verbosity("M_WARNING")
@@ -2084,18 +2140,18 @@ def main(): # used
         instantiate_BG(params, antagInjectionSite='GPi', antag=a)
         score += checkAvgFR(params=params,antagInjectionSite='GPi',antag=a)
   else:
-    print 'Normal simulation : skipping deactivation tests'
+    print('Normal simulation : skipping deactivation tests')
 
   #-------------------------
-  print "******************"
-  print "* Score:",score[0],'/',score[1]
-  print "******************"
+  print("******************")
+  print("* Score:",score[0],'/',score[1])
+  print("******************")
 
   #-------------------------
   # log the results in a file
   #-------------------------
   res = open('log/OutSummary.txt','a')
-  for k,v in params.iteritems():
+  for k,v in params.items():
     res.writelines(k+' , '+str(v)+'\n')
   res.writelines("Score: "+str(score[0])+' , '+str(score[1]))
   res.close()
@@ -2109,13 +2165,13 @@ def main(): # used
   params['max_score'] = score[1]
   with open('params_score.csv', 'wb') as csv_file:
     writer = csv.writer(csv_file)
-    for key, value in params.items():
+    for key, value in list(params.items()):
        writer.writerow([key, value])
-    for key, value in restFR.items():
+    for key, value in list(restFR.items()):
        writer.writerow([key+'_Rate', value])
-    for key, value in oscilPow.items():
+    for key, value in list(oscilPow.items()):
        writer.writerow([key+'_Pow', value])
-    for key, value in oscilFreq.items():
+    for key, value in list(oscilFreq.items()):
        writer.writerow([key+'_Freq', value])
 
 #---------------------------
