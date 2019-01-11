@@ -299,6 +299,7 @@ def createMC(name,nbCh,fake=False,parrot=True):
 
           poisson = False
           if not poisson:
+            print('\n\n\n\n\n\n\n\n\n')
             
             poisson_ens = nengo.Ensemble(int(nbSim[name]), 1, encoders=np.ones((int(nbSim[name]),1)), 
                                   gain=np.ones((int(nbSim[name]))), 

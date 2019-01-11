@@ -30,8 +30,7 @@ elif use_nengo():
   import nengo
   import nengo_ocl
   from nengo.synapses import Alpha
-  net = nengo.Network(seed=params['nestSeed'])
-  net.pops = {}
+  nengoNet = nengo.Network(seed=params['nestSeed'])
 
 
 #------------------------------------------
@@ -199,20 +198,14 @@ def create(name,fake=False,parrot=True):
         nest.Connect(pre=Fake[name],post=Pop[name],conn_spec={'rule':'one_to_one'})
 
     elif use_nengo():
-      with net:
+      with nengoNet:
         poisson = False
         if not poisson:
-          print('\n\n\n\n\n\n\n\n\n')
-        	
-          poisson_ens = nengo.Ensemble(int(nbSim[name]), 1, encoders=np.ones((int(nbSim[name]),1)), 
+        	poisson_ens = nengo.Ensemble(int(nbSim[name]), 1, encoders=np.ones((int(nbSim[name]),1)), 
                                 gain=np.ones((int(nbSim[name]))), 
                                 bias=np.zeros((int(nbSim[name]))),
                                 neuron_type=nengo.neurons.SpikingRectifiedLinear(),
                                 label=name)
-
-          nengo.Connection(nengo.Node([rate[name]], label='Ie node '+name), poisson_ens, 
-                          synapse=None, label='Ie connection '+name)
-
         else:
           poisson_node = nengo.Node(PoissonGenerator(rate[name], int(nbSim[name]), 
                                                       seed=params['nestSeed'], dt=dt, parrot=parrot), 
@@ -229,7 +222,6 @@ def create(name,fake=False,parrot=True):
 
         poisson_ens.efferents = []
         Pop[name] = poisson_ens
-        net.pops[name] = poisson_ens
         print('TODONengo: seed and dt as parameters for Poisson generators')
 
 
@@ -238,13 +230,12 @@ def create(name,fake=False,parrot=True):
     if use_nest():
       Pop[name] = nest.Create("iaf_psc_alpha_multisynapse",int(nbSim[name]),params=BGparams[name])
     elif use_nengo():
-      with net:
+      with nengoNet:
         Pop[name] = nengo.Ensemble(int(nbSim[name]), 1, encoders=np.ones((int(nbSim[name]),1)), 
                               gain=np.ones((int(nbSim[name]))), 
                               bias=np.zeros((int(nbSim[name]))), 
                               neuron_type=neuronTypes[name], 
                               label=name)
-        net.pops[name] = Pop[name]
 
         Pop[name].efferents = []
 
@@ -261,14 +252,11 @@ def create(name,fake=False,parrot=True):
 # parrot: do we use parrot neurons or not? If not, there will be no correlations in the inputs, and a waste of computation power...
 #-------------------------------------------------------------------------------
 def createMC(name,nbCh,fake=False,parrot=True):
-  print("\n\n\n\n\n"+name)
   if nbSim[name] == 0:
     print('ERROR: create(): nbSim['+name+'] = 0')
     exit()
 
   Pop[name]=[]
-  with net:
-    net.pops[name] = []
 
   if fake:
     if rate[name] == 0:
@@ -291,37 +279,21 @@ def createMC(name,nbCh,fake=False,parrot=True):
           nest.Connect(pre=Fake[name][i],post=Pop[name][i],conn_spec={'rule':'one_to_one'})
 
     elif use_nengo():
-      with net:
+      with nengoNet:
         poisson_node = nengo.Node(PoissonGenerator(rate[name], int(nbSim[name]), 
                                                     seed=params['nestSeed'], dt=dt, parrot=parrot), 
                                     size_in=int(nbSim[name]))
-        for i in range(nbCh):  
+        for i in range(nbCh):            
+          poisson_ens = nengo.Ensemble(int(nbSim[name]), 1, 
+                                        encoders=np.ones((int(nbSim[name]),1)), 
+                                        gain=np.ones((int(nbSim[name]))), 
+                                        bias=np.zeros((int(nbSim[name]))),
+                                        neuron_type=Parrot(),
+                                        label=name+' ch'+str(i))
 
-          poisson = False
-          if not poisson:
-            
-            poisson_ens = nengo.Ensemble(int(nbSim[name]), 1, encoders=np.ones((int(nbSim[name]),1)), 
-                                  gain=np.ones((int(nbSim[name]))), 
-                                  bias=np.zeros((int(nbSim[name]))),
-                                  neuron_type=nengo.neurons.SpikingRectifiedLinear(),
-                                  label=name+' ch'+str(i))
-
-            nengo.Connection(nengo.Node([rate[name]], label='Ie node '+name), poisson_ens, 
-                            synapse=None, label='Ie connection '+name)
-
-          else:          
-            poisson_ens = nengo.Ensemble(int(nbSim[name]), 1, 
-                                          encoders=np.ones((int(nbSim[name]),1)), 
-                                          gain=np.ones((int(nbSim[name]))), 
-                                          bias=np.zeros((int(nbSim[name]))),
-                                          neuron_type=Parrot(),
-                                          label=name+' ch'+str(i))
-
-            nengo.Connection(poisson_node, poisson_ens.neurons, synapse=None)
-          
+          nengo.Connection(poisson_node, poisson_ens.neurons, synapse=None)
           poisson_ens.efferents = []
           Pop[name].append(poisson_ens)
-          net.pops[name].append(poisson_ens)
           print('TODONengo: seed and dt as parameters for Poisson generators')
       
 
@@ -331,14 +303,13 @@ def createMC(name,nbCh,fake=False,parrot=True):
       for i in range(nbCh):
         Pop[name].append(nest.Create("iaf_psc_alpha_multisynapse",int(nbSim[name]),params=BGparams[name]))
     elif use_nengo():
-      with net:
+      with nengoNet:
         for i in range(nbCh):
           Pop[name].append(nengo.Ensemble(int(nbSim[name]), 1, encoders=np.ones((int(nbSim[name]),1)), 
                                     gain=np.ones((int(nbSim[name]))), 
                                     bias=np.zeros((int(nbSim[name]))), 
                                     neuron_type=neuronTypes[name], 
                                     label=name+' ch'+str(i)))
-          net.pops[name].append(Pop[name][-1])
           Pop[name][-1].efferents = []
           Pop[name][-1].Ie = nengo.Connection(nengo.Node([0], label='Ie node '+name+' ch'+str(i)), Pop[name][-1],
                                                                       transform=1./Pop[name][-1].neuron_type.params['V_th'], 
@@ -384,7 +355,7 @@ class Delay(object):
     return self.history[0]
 
 def delayed_connection(pre, post, delay, transform, synapse):
-  with net:
+  with nengoNet:
     delayNode = nengo.Node(Delay(pre.n_neurons, int((delay/1000.) / dt)).step, 
                             size_in=pre.n_neurons, 
                             size_out=pre.n_neurons)
@@ -1598,8 +1569,7 @@ def instantiate_BG(params={}, antagInjectionSite='none', antag=''):
   if use_nest():
     nest.ResetKernel()
   elif use_nengo():
-    net = nengo.Network(seed=params['nestSeed'])
-    net.pops = {}
+    nengoNet = nengo.Network(seed=params['nestSeed'])
 
   dataPath='log/'
   if use_nest():
@@ -1773,7 +1743,7 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
         nest.Connect(voltmeters[N], [Pop[N][x] for x in range(len(Pop[N])) if x<maxRecord])
   
   elif use_nengo():
-    with net:
+    with nengoNet:
       probes = {}
 
       for N in list(Pop.keys()):
@@ -1807,11 +1777,11 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
   if use_nest():
     nest.Simulate(simDuration+offsetDuration)
   elif use_nengo():
-    ocl = True
+    ocl = False
     if ocl:
-      sim = nengo_ocl.Simulator(net, dt=dt)
+      sim = nengo_ocl.Simulator(nengoNet, dt=dt)
     else:
-      sim = nengo.Simulator(net, dt=dt)
+      sim = nengo.Simulator(nengoNet, dt=dt)
     sim.run(simDuration+offsetDuration)
 
   score = 0

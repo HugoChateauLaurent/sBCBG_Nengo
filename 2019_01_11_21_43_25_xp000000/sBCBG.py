@@ -261,7 +261,7 @@ def create(name,fake=False,parrot=True):
 # parrot: do we use parrot neurons or not? If not, there will be no correlations in the inputs, and a waste of computation power...
 #-------------------------------------------------------------------------------
 def createMC(name,nbCh,fake=False,parrot=True):
-  print("\n\n\n\n\n"+name)
+  print(name)
   if nbSim[name] == 0:
     print('ERROR: create(): nbSim['+name+'] = 0')
     exit()
@@ -295,30 +295,15 @@ def createMC(name,nbCh,fake=False,parrot=True):
         poisson_node = nengo.Node(PoissonGenerator(rate[name], int(nbSim[name]), 
                                                     seed=params['nestSeed'], dt=dt, parrot=parrot), 
                                     size_in=int(nbSim[name]))
-        for i in range(nbCh):  
+        for i in range(nbCh):            
+          poisson_ens = nengo.Ensemble(int(nbSim[name]), 1, 
+                                        encoders=np.ones((int(nbSim[name]),1)), 
+                                        gain=np.ones((int(nbSim[name]))), 
+                                        bias=np.zeros((int(nbSim[name]))),
+                                        neuron_type=Parrot(),
+                                        label=name+' ch'+str(i))
 
-          poisson = False
-          if not poisson:
-            
-            poisson_ens = nengo.Ensemble(int(nbSim[name]), 1, encoders=np.ones((int(nbSim[name]),1)), 
-                                  gain=np.ones((int(nbSim[name]))), 
-                                  bias=np.zeros((int(nbSim[name]))),
-                                  neuron_type=nengo.neurons.SpikingRectifiedLinear(),
-                                  label=name+' ch'+str(i))
-
-            nengo.Connection(nengo.Node([rate[name]], label='Ie node '+name), poisson_ens, 
-                            synapse=None, label='Ie connection '+name)
-
-          else:          
-            poisson_ens = nengo.Ensemble(int(nbSim[name]), 1, 
-                                          encoders=np.ones((int(nbSim[name]),1)), 
-                                          gain=np.ones((int(nbSim[name]))), 
-                                          bias=np.zeros((int(nbSim[name]))),
-                                          neuron_type=Parrot(),
-                                          label=name+' ch'+str(i))
-
-            nengo.Connection(poisson_node, poisson_ens.neurons, synapse=None)
-          
+          nengo.Connection(poisson_node, poisson_ens.neurons, synapse=None)
           poisson_ens.efferents = []
           Pop[name].append(poisson_ens)
           net.pops[name].append(poisson_ens)
