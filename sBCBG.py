@@ -12,6 +12,7 @@ import sys
 import csv
 import numpy as np
 import numpy.random as rnd
+rnd.seed(5)
 from math import sqrt, cosh, exp, pi
 import copy
 from PoissonGenerator import *
@@ -31,7 +32,11 @@ elif use_nengo():
   import nengo_ocl
   from nengo.synapses import Alpha
   net = nengo.Network(seed=params['nestSeed'])
-  net.pops = {}
+  with net:
+    net.config[nengo.Ensemble].set_param('efferents', nengo.params.Parameter('efferents'))
+    net.config[nengo.Ensemble].set_param('Ie', nengo.params.Parameter('Ie'))
+    net.config[nengo.Connection].set_param('weight', nengo.params.Parameter('weight'))
+    net.pops = {} # Find a way to add the param via config
 
 
 #------------------------------------------
@@ -39,6 +44,8 @@ elif use_nengo():
 interactive = False # avoid loading X dependent things
                    # set to False for simulations on Sango
 storeGDF = True # unless overriden by run.py, keep spike rasters
+
+use_W_matrix = False
 
 
 
@@ -189,21 +196,20 @@ def create(name,fake=False,parrot=True):
     
     if use_nest():
       if not parrot:
-        Pop[name]  = nest.Create('poisson_generator',int(nbSim[name]))
+        Pop[name] = nest.Create('poisson_generator',int(nbSim[name]))
         nest.SetStatus(Pop[name],{'rate':rate[name]})
         
       else:      
         Fake[name]  = nest.Create('poisson_generator',int(nbSim[name]))
         nest.SetStatus(Fake[name],{'rate':rate[name]})
-        Pop[name]  = nest.Create('parrot_neuron',int(nbSim[name]))
+        Pop[name] = nest.Create('parrot_neuron',int(nbSim[name]))
         nest.Connect(pre=Fake[name],post=Pop[name],conn_spec={'rule':'one_to_one'})
 
     elif use_nengo():
       with net:
         poisson = False
         if not poisson:
-          print('\n\n\n\n\n\n\n\n\n')
-        	
+          
           poisson_ens = nengo.Ensemble(int(nbSim[name]), 1, encoders=np.ones((int(nbSim[name]),1)), 
                                 gain=np.ones((int(nbSim[name]))), 
                                 bias=np.zeros((int(nbSim[name]))),
@@ -227,10 +233,9 @@ def create(name,fake=False,parrot=True):
           nengo.Connection(poisson_node, poisson_ens.neurons, synapse=None)
           
 
-        poisson_ens.efferents = []
+        net.config[poisson_ens].efferents = []
         Pop[name] = poisson_ens
         net.pops[name] = poisson_ens
-        print('TODONengo: seed and dt as parameters for Poisson generators')
 
 
   else:
@@ -246,9 +251,9 @@ def create(name,fake=False,parrot=True):
                               label=name)
         net.pops[name] = Pop[name]
 
-        Pop[name].efferents = []
+        net.config[Pop[name]].efferents = []
 
-        Pop[name].Ie = nengo.Connection(nengo.Node([0], label='Ie node '+name), Pop[name], 
+        net.config[Pop[name]].Ie = nengo.Connection(nengo.Node([0], label='Ie node '+name), Pop[name], 
                           transform=1./Pop[name].neuron_type.params['V_th'], 
                           synapse=None, label='Ie connection '+name)
 #-------------------------------------------------------------------------------
@@ -261,19 +266,21 @@ def create(name,fake=False,parrot=True):
 # parrot: do we use parrot neurons or not? If not, there will be no correlations in the inputs, and a waste of computation power...
 #-------------------------------------------------------------------------------
 def createMC(name,nbCh,fake=False,parrot=True):
-  print("\n\n\n\n\n"+name)
   if nbSim[name] == 0:
     print('ERROR: create(): nbSim['+name+'] = 0')
     exit()
 
   Pop[name]=[]
-  with net:
-    net.pops[name] = []
+  if use_nengo():
+    with net:
+      net.pops[name] = []
 
   if fake:
     if rate[name] == 0:
       print('ERROR: create(): rate['+name+'] = 0 Hz')
     print('* '+name+'(fake):',nbSim[name],'Poisson generators with avg rate:',rate[name])
+
+    fakeRate = [2., 100., 9., 5.] if name == 'CSN' else [rate[name] for i in range(params['nbCh'])]
 
     if not parrot:
       print("/!\ /!\ /!\ /!\ \nWARNING: parrot neurons not used, no correlations in inputs\n")
@@ -286,15 +293,12 @@ def createMC(name,nbCh,fake=False,parrot=True):
       else:      
         for i in range(nbCh):
           Fake[name].append(nest.Create('poisson_generator',int(nbSim[name])))
-          nest.SetStatus(Fake[name][i],{'rate':rate[name]})
+          nest.SetStatus(Fake[name][i],{'rate':fakeRate[i]})
           Pop[name].append(nest.Create('parrot_neuron',int(nbSim[name])))
           nest.Connect(pre=Fake[name][i],post=Pop[name][i],conn_spec={'rule':'one_to_one'})
 
     elif use_nengo():
       with net:
-        poisson_node = nengo.Node(PoissonGenerator(rate[name], int(nbSim[name]), 
-                                                    seed=params['nestSeed'], dt=dt, parrot=parrot), 
-                                    size_in=int(nbSim[name]))
         for i in range(nbCh):  
 
           poisson = False
@@ -306,10 +310,16 @@ def createMC(name,nbCh,fake=False,parrot=True):
                                   neuron_type=nengo.neurons.SpikingRectifiedLinear(),
                                   label=name+' ch'+str(i))
 
-            nengo.Connection(nengo.Node([rate[name]], label='Ie node '+name), poisson_ens, 
+            nengo.Connection(nengo.Node([fakeRate[i]], label='Ie node '+name), poisson_ens, 
                             synapse=None, label='Ie connection '+name)
 
-          else:          
+          else:   
+            poisson_node = nengo.Node(PoissonGenerator(fakeRate[i], int(nbSim[name]), 
+                                          seed=params['nestSeed'], 
+                                          dt=dt, 
+                                          parrot=parrot), 
+                                          size_in=int(nbSim[name]))   
+
             poisson_ens = nengo.Ensemble(int(nbSim[name]), 1, 
                                           encoders=np.ones((int(nbSim[name]),1)), 
                                           gain=np.ones((int(nbSim[name]))), 
@@ -319,10 +329,9 @@ def createMC(name,nbCh,fake=False,parrot=True):
 
             nengo.Connection(poisson_node, poisson_ens.neurons, synapse=None)
           
-          poisson_ens.efferents = []
+          net.config[poisson_ens].efferents = []
           Pop[name].append(poisson_ens)
           net.pops[name].append(poisson_ens)
-          print('TODONengo: seed and dt as parameters for Poisson generators')
       
 
   else:
@@ -339,30 +348,30 @@ def createMC(name,nbCh,fake=False,parrot=True):
                                     neuron_type=neuronTypes[name], 
                                     label=name+' ch'+str(i)))
           net.pops[name].append(Pop[name][-1])
-          Pop[name][-1].efferents = []
-          Pop[name][-1].Ie = nengo.Connection(nengo.Node([0], label='Ie node '+name+' ch'+str(i)), Pop[name][-1],
+          net.config[Pop[name][-1]].efferents = []
+          net.config[Pop[name][-1]].Ie = nengo.Connection(nengo.Node([0], label='Ie node '+name+' ch'+str(i)), Pop[name][-1],
                                                                       transform=1./Pop[name][-1].neuron_type.params['V_th'], 
                                                                       synapse=None, 
                                                                       label='Ie connection '+name+' ch'+str(i))
 
 #------------------------------------------------------------------------------
 # Nengo only:
-# TODO: rewrite
+# TODO: rewrite doc
 # Computes the weight matrix of size m*n for a connection between pre -> post
 # with n_pre and n_post number of neurons and a given integer_inDegree.
 # Assumption: a cell from pre cannot be connected twice to a cell from post -> TODO rewrite: Not in Nest
 #------------------------------------------------------------------------------
-def connectivity_matrix(rule, parameter, n_pre, n_post):
+def connectivity_matrix(rule, value, n_pre, n_post):
   connectivity = np.zeros((n_post, n_pre))
 
   if rule=='fixed_indegree':
     for post_neuron in range(n_post):
-      for in_i in range(parameter):
+      for in_i in range(value):
         pre_neuron = rnd.randint(0, n_pre)
         connectivity[post_neuron, pre_neuron] += 1
   
   elif rule=='fixed_total_number':
-    for connection in range(parameter):
+    for connection in range(value):
       pre_neuron = rnd.randint(0, n_pre)
       post_neuron = rnd.randint(0, n_post)
       connectivity[post_neuron, pre_neuron] += 1
@@ -373,13 +382,13 @@ def connectivity_matrix(rule, parameter, n_pre, n_post):
   return connectivity
 
 #------------------------------------------------------------------------------
-# Nengo only:
+# Nengo only: delayed connections
 #------------------------------------------------------------------------------
 class Delay(object):
   def __init__(self, dimensions, timesteps):
     self.history = np.zeros((timesteps, dimensions))
   def step(self, t, x):
-    self.history = np.roll(self.history, -1)
+    self.history = np.roll(self.history, -1, 0)
     self.history[-1] = x
     return self.history[0]
 
@@ -410,11 +419,19 @@ def delayed_connection(pre, post, delay, transform, synapse):
 # - `inDegree`, `receptor_type`, `weight`, `delay` are Nest connection params
 #------------------------------------------------------------------------------
 def mass_connect(source, dest, synapse_label, inDegree, receptor_type, weight, delay, stochastic_delays=None, verbose=False):
+
+  #print('W:'+str(weight))
+
+  #print('\nmass_connect '+str(synapse_label))
+
   def printv(text):
     if verbose:
       print(text)
   
   sigmaDependentInterval = True # Hugo's method
+
+  n_source = source.n_neurons if use_nengo() else len(source)
+  n_dest = dest.n_neurons if use_nengo() else len(dest)
 
   # potential initialization of stochastic delays
   if stochastic_delays != None and delay > 0 and stochastic_delays > 0.:
@@ -440,52 +457,78 @@ def mass_connect(source, dest, synapse_label, inDegree, receptor_type, weight, d
   # are targeted by the same number of axons (an integer number)
   integer_inDegree = np.floor(inDegree)
   if integer_inDegree>0:      
-    printv('Adding '+str(int(integer_inDegree*len(dest)))+' connections with rule `fixed_indegree`\n')
+    printv('Adding '+str(int(integer_inDegree*n_dest))+' connections with rule `fixed_indegree`\n')
+    connectivity = connectivity_matrix('fixed_indegree', int(integer_inDegree), n_source, n_dest)
+    #print('connecting '+n_source*n_dest)
     if use_nest():
-      nest.Connect(source,
-                   dest,
-                   {'rule': 'fixed_indegree', 'indegree': int(integer_inDegree)},
-                   {'model': 'static_synapse_lbl', 'synapse_label': synapse_label, 'receptor_type': receptor_type, 'weight': weight, 'delay':delay})
+
+      if use_W_matrix:
+        nest.Connect(source, dest,
+                     {'rule': 'all_to_all'},
+                     {'model': 'static_synapse_lbl', 
+                     'synapse_label': synapse_label, 
+                     'receptor_type': receptor_type, 
+                     'weight': (connectivity*weight).tolist(), 
+                     'delay':delay})
+
+      else:
+        nest.Connect(source,
+                     dest,
+                     {'rule': 'fixed_indegree', 'indegree': int(integer_inDegree)},
+                     {'model': 'static_synapse_lbl', 'synapse_label': synapse_label, 'receptor_type': receptor_type, 'weight': weight, 'delay':delay})
     elif use_nengo():
       if stochastic_delays:
         raise NotImplementedError("TODONengo: delay distribution")
-      connectivity = connectivity_matrix('fixed_indegree', int(integer_inDegree), source.n_neurons, dest.n_neurons)
+
       nengo_weight = weight*exp(1)*dest.neuron_type.params['tau_syn'][receptor_type-1]/dest.neuron_type.params['V_th']
       synapse = Alpha(dest.neuron_type.params['tau_syn'][receptor_type-1])
       synapse.label = synapse_label
       connection = delayed_connection(source, dest, delay, connectivity*nengo_weight, synapse)
 
       #store weight to retrieve connectivity matrix in mass_mirror:
-      connection['delay_to_post'].weight = nengo_weight
+      net.config[connection['delay_to_post']].weight = nengo_weight
 
-      source.efferents.append(connection)
+      net.config[source].efferents.append(connection)
 
   # The second `fixed_total_number` connection distributes remaining axonal
   # contacts at random (i.e. the remaining fractional part after the first step)
   float_inDegree = inDegree - integer_inDegree
-  remaining_connections = np.round(float_inDegree * len(dest))
+  remaining_connections = np.round(float_inDegree * n_dest)
   if remaining_connections > 0:
+    #print('_mass_connect '+str(synapse_label))
+    connectivity = connectivity_matrix('fixed_total_number', int(remaining_connections), n_source, n_dest)
+    #print('connecting '+n_source*n_dest)
     if use_nest():
       printv('Adding '+str(remaining_connections)+' remaining connections with rule `fixed_total_number`\n')
-      nest.Connect(source,
-                   dest,
-                   {'rule': 'fixed_total_number', 'N': int(remaining_connections)},
-                   {'model': 'static_synapse_lbl', 'synapse_label': synapse_label, 'receptor_type': receptor_type, 'weight': weight, 'delay':delay})
+      if use_W_matrix:
+        nest.Connect(source, dest,
+                     {'rule': 'all_to_all'},
+                     {'model': 'static_synapse_lbl', 
+                     'synapse_label': synapse_label, 
+                     'receptor_type': receptor_type, 
+                     'weight': (connectivity*weight).tolist(), 
+                     'delay':delay})
+      else:
+        nest.Connect(source,
+                     dest,
+                     {'rule': 'fixed_total_number', 'N': int(remaining_connections)},
+                     {'model': 'static_synapse_lbl', 'synapse_label': synapse_label, 'receptor_type': receptor_type, 'weight': weight, 'delay':delay})
+    
     elif use_nengo():
       
       if stochastic_delays:
         raise NotImplementedError("TODONengo: delay distribution")
       
-      connectivity = connectivity_matrix('fixed_total_number', int(remaining_connections), source.n_neurons, dest.n_neurons)
       nengo_weight = weight*exp(1)*dest.neuron_type.params['tau_syn'][receptor_type-1]/dest.neuron_type.params['V_th']
       synapse = Alpha(dest.neuron_type.params['tau_syn'][receptor_type-1])
       synapse.label = synapse_label
       connection = delayed_connection(source, dest, delay, connectivity*nengo_weight, synapse)
       
       #store weight to retrieve connectivity matrix in mass_mirror:
-      connection['delay_to_post'].weight = nengo_weight
+      net.config[connection['delay_to_post']].weight = nengo_weight
 
-      source.efferents.append(connection)
+      net.config[source].efferents.append(connection)
+
 
 #------------------------------------------------------------------------------
 # Routine to duplicate a connection made with a specific receptor, with another
@@ -496,6 +539,8 @@ def mass_connect(source, dest, synapse_label, inDegree, receptor_type, weight, d
 #------------------------------------------------------------------------------
 def mass_mirror(source, synapse_label, receptor_type, weight, delay, stochastic_delays, verbose=False):
 
+  #print('W:'+str(weight))
+
   def printv(text):
     if verbose:
       print(text)
@@ -505,24 +550,27 @@ def mass_mirror(source, synapse_label, receptor_type, weight, delay, stochastic_
   
   if use_nest():
     ampa_conns = nest.GetConnections(source=source, synapse_label=synapse_label)
+    # print('mirroring '+str(len(ampa_conns)))
 
   elif use_nengo():
-    ampa_conns = [conn['delay_to_post'] for conn in source.efferents if conn['delay_to_post'].synapse.label==synapse_label]
+    ampa_conns = [conn['delay_to_post'] for conn in net.config[source].efferents if conn['delay_to_post'].synapse.label==synapse_label]
+    # print('mirroring '+str(int(np.round([np.array(conn.transform)/net.config[conn].weight for conn in ampa_conns]).sum()))+' / '+str(np.round([np.array(conn.transform)/net.config[conn].weight for conn in ampa_conns]).size))
     for conn in ampa_conns:
-      if not (np.round(np.array(conn.transform)/conn.weight)!=0).any():
-        print("Nengo implementation warning: empty connection in mass mirror. See proposed solution below.")
-        # proposed solution: [conn for conn in source.efferents if conn.synapse.label==synapse_label and (np.round(np.array(conn.transform)/conn.weight)!=0).any()]
+      if not (np.round(np.array(conn.transform)/net.config[conn].weight)!=0).any():
+        raise ValueError("Nengo implementation warning: empty connection in mass mirror. See proposed solution below.")
+        # proposed solution: [conn for conn in net.config[source].efferents if conn.synapse.label==synapse_label and (np.round(np.array(conn.transform)/net.config[conn].weight)!=0).any()]
   
   # in rare cases, there may be no connections, guard against that
   if ampa_conns:
     # extract just source and target GID lists, all other information is irrelevant here
     printv('found '+str(len(ampa_conns))+' AMPA connections\n')
     
+    '''
     if stochastic_delays != None and delay > 0:
       if use_nengo():
         raise NotImplementedError("TODONengo: delay distribution")
       printv('Using stochastic delays in mass-mirror')
-      delay = np.array(nest.GetStatus(ampa_conns, keys=['delay'])).flatten()
+      delay = np.array(nest.GetStatus(ampa_conns, keys=['delay'])).flatten()'''
     
     if use_nest():
       src, tgt, _, _, _ = list(zip(*ampa_conns))
@@ -532,16 +580,16 @@ def mass_mirror(source, synapse_label, receptor_type, weight, delay, stochastic_
                     'receptor_type': receptor_type, 'weight': weight, 'delay':delay})
     if use_nengo():
       for conn in ampa_conns:        
-        connectivity = np.array(conn.transform)/conn.weight
+        connectivity = np.array(conn.transform)/net.config[conn].weight
         nengo_weight = weight*exp(1)*conn.post.ensemble.neuron_type.params['tau_syn'][receptor_type-1]/conn.post.ensemble.neuron_type.params['V_th']        
         synapse = Alpha(conn.post.ensemble.neuron_type.params['tau_syn'][receptor_type-1])
-        synapse.label = synapse_label
+        synapse.label = synapse_label # tag with the same number (doesn't matter)
         connection = delayed_connection(source, conn.post.ensemble, delay, connectivity*nengo_weight, synapse)
         
         #store weight to retrieve connectivity matrix in mass_mirror:
-        connection['delay_to_post'].weight = nengo_weight
+        net.config[connection['delay_to_post']].weight = nengo_weight
 
-        source.efferents.append(connection)
+        net.config[source].efferents.append(connection)
 
 #-------------------------------------------------------------------------------
 # Establishes a connexion between two populations, following the results of LG14
@@ -1150,8 +1198,9 @@ if use_nengo():
   neuronTypes = initNeuronTypes(BGparams, commonNeuronType)
 
 
-Pop = {}
-Fake= {} # Fake contains the Poisson Generators, that will feed the parrot_neurons, stored in Pop
+Pop  = {}
+print('nbCh', params['nbCh'])
+Fake = {} if params['nbCh'] == 1 else {name: [] for name in nbSim.keys()} # Fake contains the Poisson Generators, that will feed the parrot_neurons, stored in Pop
 ConnectMap = {} # when connections are drawn, in "create()", they are stored here so as to be re-usable
 
 # the dictionary used to store the desired discharge rates of the various Poisson generators that will be used as external inputs
@@ -1208,7 +1257,7 @@ def createBG():
       update_Ie = lambda p: nest.SetStatus(Pop[p],{"I_e":params['Ie'+p]})
     elif use_nengo():
       def update_Ie(p):
-        Ie = Pop[p].Ie.pre
+        Ie = net.config[Pop[p]].Ie.pre
         if Ie.label[:2] != 'Ie':
           print(Ie)
           raise LookupError(p+'.Ie is not Ie node')
@@ -1225,7 +1274,7 @@ def createBG():
     elif use_nengo():
       def update_Ie(p):
         for i in range(len(Pop[p])):
-          Ie = Pop[p][i].Ie.pre
+          Ie = net.config[Pop[p][i]].Ie.pre
           if Ie.label[:2] != 'Ie':
             print(Ie)
             raise LookupError(p+str(i)+'.Ie is not Ie node')
@@ -1741,8 +1790,10 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
   # measures
   #-------------------------
   spkDetect={} # spike detectors used to record the experiment
+  spkMC={} # spike detectors for each channel
   multimeters={} # multimeters used to record one neuron in each population
   expeRate={}
+
 
   if computeLFP:
     samplingRate = 2000.
@@ -1755,13 +1806,21 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
   if antagInjectionSite != 'none':
     antagStr = antagInjectionSite+'_'+antag+'_'
 
+
+
   if use_nest():
+    for N in list(Pop.keys()):
+      # add spike detector for individual channel
+      spkMC[N] = [nest.Create("spike_detector", params={"withgid": True, "withtime": True, "label": antagStr+N, "to_file": storeGDF, 'start':offsetDuration+simulationOffset,'stop':offsetDuration+simDuration+simulationOffset}) for i in range(params['nbCh'])]
+      for i in range(params['nbCh']):
+        nest.Connect(Pop[N][i], spkMC[N][i])
     for N in NUCLEI:
       # 1000ms offset period for network stabilization
       spkDetect[N] = nest.Create("spike_detector", params={"withgid": True, "withtime": True, "label": antagStr+N, "to_file": storeGDF, 'start':offsetDuration+simulationOffset,'stop':offsetDuration+simDuration+simulationOffset})
       connect_detector(N)
       #spkDetect[N] = nest.Create("spike_detector", len([Pop[N][x] for x in range(len(Pop[N])) if x<maxRecord]), params={"withgid": True, "withtime": True, "label": antagStr+N, "to_file": storeGDF, 'start':offsetDuration+simulationOffset,'stop':offsetDuration+simDuration+simulationOffset})
       #nest.Connect([Pop[N][0]], spkDetect[N])
+
       if showPotential:
         # multimeter records only the last 200ms in one neuron in each population
         multimeters[N] = nest.Create('multimeter', params = {"withgid": True, 'withtime': True, 'interval': 0.1, 'record_from': ['V_m'], "label": antagStr+N, "to_file": False, 'start':offsetDuration+simulationOffset+simDuration-200.,'stop':offsetDuration+simDuration+simulationOffset})
@@ -1807,6 +1866,16 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
   if use_nest():
     nest.Simulate(simDuration+offsetDuration)
   elif use_nengo():
+
+    # Show all connections
+    if False:
+      for ens in net.pops:
+        for i in range(2):
+          print('** '+ens+str(i))
+
+          for tgt in net.config[net.pops[ens][i]].efferents:
+            print(tgt['delay_to_post'].post.ensemble.label+ ' \t'+str(net.config[tgt['delay_to_post']].weight))
+
     ocl = True
     if ocl:
       sim = nengo_ocl.Simulator(net, dt=dt)
@@ -1815,6 +1884,8 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
     sim.run(simDuration+offsetDuration)
 
   score = 0
+
+  
 
   text=[]
   frstr = "#" + str(params['LG14modelID'])+ " , " + antagInjectionSite + ', '
@@ -1839,15 +1910,23 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
       for N in list(Pop.keys()):
 
         if params['nbCh']>1:
-          print(N, np.array([sim.data[probes[N][ch]['outputs']] for ch in params['nbCh']]).mean())
-          for probing in list(probes[N].keys()):
-            '''plt.plot(sim.trange(), sim.data[probes[N][probing]])
-            title = N+' '+probing
-            plt.title(title)
-            plt.savefig('plots/'+title+'.png')
-            #plt.show()
-            plt.close()'''
-            pass
+
+          print('\n\n'+N+' rates:')
+
+          ratesMC = np.array([sim.data[probes[N][ch]['outputs']] for ch in range(params['nbCh'])])
+          #print(ratesMC.mean())
+          ratesMC = ratesMC.mean(axis=(1,2))
+          for rate_i in ratesMC:
+            print(rate_i)
+
+          '''for probing in list(probes[N].keys()):
+                                          plt.plot(sim.trange(), sim.data[probes[N][probing]])
+                                          title = N+' '+probing
+                                          plt.title(title)
+                                          plt.savefig('plots/'+title+'.png')
+                                          #plt.show()
+                                          plt.close()
+                                          pass'''
         else:
           print(N, sim.data[probes[N]['outputs']].mean())
           for probing in list(probes[N].keys()):
@@ -1858,10 +1937,18 @@ def checkAvgFR(showRasters=False,params={},antagInjectionSite='none',antag='',lo
             #plt.show()
             plt.close()
 
+    elif use_nest():
+      for N in list(Pop.keys()):
+        # print rate of each channel
+        print('\n\n'+N+' rates:')
+        for i in range(params['nbCh']):
+          print(round(nest.GetStatus(spkMC[N][i], 'n_events')[0] / float(nbSim[N]*simDuration) * 1000, 2))
+
     for N in NUCLEI:
       strTestPassed = 'NO!'
       if use_nest():
         expeRate[N] = nest.GetStatus(spkDetect[N], 'n_events')[0] / float(nbSim[N]*simDuration*params['nbCh']) * 1000
+
       elif use_nengo():
         '''expeRate[N] = sim.data[probes[N]['outputs']].mean()
         for probing in list(probes[N].keys()):
@@ -2270,3 +2357,67 @@ def main(): # used
 #---------------------------
 if __name__ == '__main__':
   main()
+
+
+#-----------------------------------------------------------------------
+def nengo_BG(dimensions): # used
+
+  params['nbCh'] = dimensions
+
+  deactivationTests = False
+
+  if len(sys.argv) >= 2:
+    print("Command Line Parameters")
+    paramKeys = ['LG14modelID',
+                 'nbMSN',
+                 'nbFSI',
+                 'nbSTN',
+                 'nbGPe',
+                 'nbGPi',
+                 'nbCSN',
+                 'nbPTN',
+                 'nbCMPf',
+                 'GMSN',
+                 'GFSI',
+                 'GSTN',
+                 'GGPe',
+                 'GGPi', 
+                 'IeGPe',
+                 'IeGPi',
+                 'inDegCSNMSN',
+                 'inDegPTNMSN',
+                 'inDegCMPfMSN',
+                 'inDegFSIMSN',
+                 'inDegMSNMSN', 
+                 'inDegCSNFSI',
+                 'inDegPTNFSI',
+                 'inDegSTNFSI',
+                 'inDegGPeFSI',
+                 'inDegCMPfFSI',
+                 'inDegFSIFSI',
+                 'inDegPTNSTN',
+                 'inDegCMPfSTN',
+                 'inDegGPeSTN',
+                 'inDegCMPfGPe',
+                 'inDegSTNGPe',
+                 'inDegMSNGPe',
+                 'inDegGPeGPe',
+                 'inDegMSNGPi',
+                 'inDegSTNGPi',
+                 'inDegGPeGPi',
+                 'inDegCMPfGPi',
+                 ]
+    print(sys.argv)
+    if len(sys.argv) == len(paramKeys)+1:
+      print("Using command line parameters")
+      print(sys.argv)
+      i = 0
+      for k in paramKeys:
+        i+=1
+        params[k] = float(sys.argv[i])
+    else :
+      print("Incorrect number of parameters:",len(sys.argv),"-",len(paramKeys),"expected")
+
+  instantiate_BG(params, antagInjectionSite='none', antag='')
+
+  return net

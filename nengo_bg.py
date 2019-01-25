@@ -8,7 +8,7 @@ from nengo.networks.ensemblearray import EnsembleArray
 from nengo.solvers import NnlsL2nz
 
 
-def sBCBG(dimensions, n_neurons_per_ensemble=100, output_weight=-3.,
+def sBCBG(dimensions, filter_tau, n_neurons_per_ensemble=100, output_weight=-3.,
                  input_bias=0., ampa_config=None, gaba_config=None, net=None):
     """Winner take all network, typically used for action selection.
 
@@ -98,11 +98,6 @@ def sBCBG(dimensions, n_neurons_per_ensemble=100, output_weight=-3.,
        ganglia. Biological Cybernetics 84, 401-423.
     """
 
-    if net is None:
-        net = nengo.Network("Basal Ganglia")
-
-    
-
     # Affects all ensembles / connections in the BG
     # unless they've been overridden on `net.config`
     config = nengo.Config(nengo.Ensemble, nengo.Connection)
@@ -117,28 +112,22 @@ def sBCBG(dimensions, n_neurons_per_ensemble=100, output_weight=-3.,
                       "use the default decoder solver. Installing SciPy "
                       "may improve BasalGanglia performance.")
 
-    ea_params = {'n_neurons': n_neurons_per_ensemble,
-                 'n_ensembles': dimensions}
+        
+    import sBCBG
+    net = sBCBG.nengo_BG(dimensions)
+
+    print(net.pops)
+
+
+
 
     with config, net:
-        net.strD1 = EnsembleArray(label="Striatal D1 neurons",
-                                  intercepts=Uniform(Weights.e, 1),
-                                  **ea_params)
-        net.strD2 = EnsembleArray(label="Striatal D2 neurons",
-                                  intercepts=Uniform(Weights.e, 1),
-                                  **ea_params)
-        net.stn = EnsembleArray(label="Subthalamic nucleus",
-                                intercepts=Uniform(Weights.ep, 1),
-                                **ea_params)
-        net.gpi = EnsembleArray(label="Globus pallidus internus",
-                                intercepts=Uniform(Weights.eg, 1),
-                                **ea_params)
-        net.gpe = EnsembleArray(label="Globus pallidus externus",
-                                intercepts=Uniform(Weights.ee, 1),
-                                **ea_params)
-
+        
+        # connect input to CSN
         net.input = nengo.Node(label="input", size_in=dimensions)
-        net.output = nengo.Node(label="output", size_in=dimensions)
+        for d in range(dimensions):
+            nengo.Connection(net.input[d], net.pops['CSN'][d], 
+                            synapse=None, label='CSN input')
 
         # add bias input (BG performs best in the range 0.5--1.5)
         if abs(input_bias) > 0.0:
@@ -146,46 +135,22 @@ def sBCBG(dimensions, n_neurons_per_ensemble=100, output_weight=-3.,
                                         label="basal ganglia bias")
             nengo.Connection(net.bias_input, net.input)
 
-        # spread the input to StrD1, StrD2, and STN
-        nengo.Connection(net.input, net.strD1.input, synapse=None,
-                         transform=Weights.ws * (1 + Weights.lg))
-        nengo.Connection(net.input, net.strD2.input, synapse=None,
-                         transform=Weights.ws * (1 - Weights.le))
-        nengo.Connection(net.input, net.stn.input, synapse=None,
-                         transform=Weights.wt)
-
-        # connect the striatum to the GPi and GPe (inhibitory)
-        strD1_output = net.strD1.add_output('func_str', Weights.str_func)
-        strD2_output = net.strD2.add_output('func_str', Weights.str_func)
-        with gaba_config:
-            nengo.Connection(strD1_output, net.gpi.input,
-                             transform=-Weights.wm)
-            nengo.Connection(strD2_output, net.gpe.input,
-                             transform=-Weights.wm)
-
-        # connect the STN to GPi and GPe (broad and excitatory)
-        tr = Weights.wp * np.ones((dimensions, dimensions))
-        stn_output = net.stn.add_output('func_stn', Weights.stn_func)
-        with ampa_config:
-            nengo.Connection(stn_output, net.gpi.input, transform=tr)
-            nengo.Connection(stn_output, net.gpe.input, transform=tr)
-
-        # connect the GPe to GPi and STN (inhibitory)
-        gpe_output = net.gpe.add_output('func_gpe', Weights.gpe_func)
-        with gaba_config:
-            nengo.Connection(gpe_output, net.gpi.input, transform=-Weights.we)
-            nengo.Connection(gpe_output, net.stn.input, transform=-Weights.wg)
 
         # connect GPi to output (inhibitory)
-        gpi_output = net.gpi.add_output('func_gpi', Weights.gpi_func)
-        nengo.Connection(gpi_output, net.output, synapse=None,
-                         transform=output_weight)
-
-    # Return ampa_config and gaba_config to previous states, if changed
-    if override_ampa:
-        del ampa_config[nengo.Connection].synapse
-    if override_gaba:
-        del gaba_config[nengo.Connection].synapse
+        decoding_weight = 1 # scaling of decoding GPi->out
+        net.output = nengo.Node(label="output", size_in=dimensions)
+        for d in range(dimensions):
+            #print('radius',net.pops['GPi'][d].radius)
+            #print('eval_points',net.pops['GPi'][d].eval_points)
+            #radius = net.pops['GPi'][d].radius
+            #eval_points = np.array([np.linspace(-radius, radius, num=n_eval_points)]).T
+            #print("eval_points.shape", eval_points.shape)
+            GPi_ens = net.pops["GPi"][d]
+            decoder_values = np.ones((GPi_ens.n_neurons, 1)) * decoding_weight
+            nengo.Connection(GPi_ens, net.output[d], synapse=nengo.synapses.Lowpass(filter_tau),
+                             transform=output_weight, 
+                             #eval_points=eval_points)
+                             solver=nengo.solvers.NoSolver(decoder_values))
 
     return net
 

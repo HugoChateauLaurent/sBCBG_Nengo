@@ -17,9 +17,9 @@ params = {
 'nbArky':                       5., # part of the GPe which projects to the striatum
 'nbProt':                      20., # part of the GPe which projects to the STN and GPi/SNr
 'nbGPi':                       14., # ^
-'nbCSN':                     3000., # ^
-'nbPTN':                      100., # ^
-'nbCMPf':                       9., # ^
+'nbCSN':                     10.,#3000., # ^
+'nbPTN':                     10.,# 100., # ^
+'nbCMPf':                    10.,#   9., # ^
 
 'GCSNMSN':           1., # defining connection types for channel-based models (focused or diffuse) based on LG14 - refer to this paper for justification
 'GPTNMSN':           1., # ^
@@ -66,13 +66,13 @@ params = {
 'GGPeGPi':           1., # LG14: no data available to decide; setting to diffuse improve selection properties
 'GProtGPi':          1., #
 
-'IeMSN':                        0., # tonic input currents (default: no input current)
-'IeFSI':                        0., # ^
-'IeSTN':                        0., # ^
-'IeGPe':                        0., # ^
+'IeMSN':                        29.75, # tonic input currents (default: no input current)
+'IeFSI':                        1., # ^
+'IeSTN':                        9.25, # ^
+'IeGPe':                        15., # ^
 'IeArky':                       0., # ^
 'IeProt':                       0., # ^
-'IeGPi':                        0., # ^
+'IeGPi':                        15., # ^
 
 # There are 3 different format for setting the inDegreeXY (=number of different incoming neurons from X that target one neuron in Y)
 # - 'inDegreeAbs': specify the absolute number of different input neurons from X that target one neuron of Y --- be careful when using this setting, as the population size varies widly between the striatum and the downstream nuclei
