@@ -8,4 +8,4 @@ Supervisors: Marcel van Gerven (@distrep) and Serge Thill
 
 # Poster presented at CJC-SC
 
-https://docs.google.com/viewer?url=
+https://docs.google.com/viewer?url=https://github.com/HugoChateauLaurent/sBCBG_Nengo/blob/master/capitaselecta_chateaulaurent/appendices/poster.pdf
