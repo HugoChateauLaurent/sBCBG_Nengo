@@ -8,5 +8,5 @@ Supervisors: Marcel van Gerven (@distrep) and Serge Thill
 
 # Poster presented at CJC-SC
 
-![Alt text](./poster/1.svg)
-<img src="./poster/1.svg">
+![Alt text](poster.png?raw=true)
+
